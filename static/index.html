@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>采购管理智能体 - 流式交互</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -190,11 +191,9 @@
             background: #f8f9fa;
             border-radius: 12px;
             padding: 20px;
-            font-family: 'Consolas', 'Monaco', monospace;
             font-size: 0.95rem;
             line-height: 1.6;
             color: #333;
-            word-break: break-all;
             border: 2px solid #e0e0e0;
         }
 
@@ -214,7 +213,6 @@
             margin-bottom: 16px;
             padding: 12px 16px;
             border-radius: 8px;
-            white-space: pre-wrap;
             word-break: break-word;
         }
 
@@ -237,7 +235,10 @@
             background: #f1f8e9;
             border-left: 4px solid #4caf50;
             color: #2e7d32;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .message-content .markdown-body {
+            color: #2e7d32;
         }
 
         .message-error {
@@ -328,6 +329,94 @@
             transform: translateX(20px);
         }
 
+        /* Markdown 样式 */
+        .markdown-body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 0.95rem;
+            line-height: 1.7;
+        }
+
+        .markdown-body h1, .markdown-body h2, .markdown-body h3, 
+        .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+            margin-top: 1em;
+            margin-bottom: 0.5em;
+            font-weight: 600;
+            color: inherit;
+        }
+
+        .markdown-body h1 { font-size: 1.5em; }
+        .markdown-body h2 { font-size: 1.3em; }
+        .markdown-body h3 { font-size: 1.1em; }
+
+        .markdown-body p {
+            margin-bottom: 0.8em;
+        }
+
+        .markdown-body ul, .markdown-body ol {
+            margin-left: 1.5em;
+            margin-bottom: 0.8em;
+        }
+
+        .markdown-body li {
+            margin-bottom: 0.3em;
+        }
+
+        .markdown-body code {
+            background: rgba(0,0,0,0.06);
+            padding: 0.2em 0.4em;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+        }
+
+        .markdown-body pre {
+            background: rgba(0,0,0,0.06);
+            padding: 1em;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 0.8em;
+        }
+
+        .markdown-body pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .markdown-body table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 0.8em;
+        }
+
+        .markdown-body th, .markdown-body td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .markdown-body th {
+            background: rgba(0,0,0,0.05);
+            font-weight: 600;
+        }
+
+        .markdown-body blockquote {
+            border-left: 4px solid #ccc;
+            padding-left: 1em;
+            margin-left: 0;
+            color: #666;
+            margin-bottom: 0.8em;
+        }
+
+        .markdown-body hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 1em 0;
+        }
+
+        .markdown-body strong {
+            font-weight: 600;
+        }
+
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -366,7 +455,6 @@
         </div>
 
         <div class="main-content">
-            <!-- 左侧面板：参数输入 -->
             <div class="panel">
                 <div class="panel-header">
                     🎯 智能体选择与参数配置
@@ -449,7 +537,6 @@
                 </div>
             </div>
 
-            <!-- 右侧面板：响应显示 -->
             <div class="panel">
                 <div class="panel-header">
                     📝 智能体分析结果
@@ -476,10 +563,14 @@
     <script>
         let currentAgent = 'allocation';
         let isStreaming = false;
-        let accumulatedContent = '';
+        let showThinking = true;
         let lastMessageDiv = null;
 
-        // 智能体切换
+        marked.setOptions({
+            breaks: true,
+            gfm: true
+        });
+
         document.querySelectorAll('.agent-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 if (isStreaming) return;
@@ -502,21 +593,19 @@
             });
         });
 
-        // 提交按钮
         document.getElementById('btn-submit').addEventListener('click', async () => {
             if (isStreaming) return;
             
             const btn = document.getElementById('btn-submit');
             const responseArea = document.getElementById('response-area');
-            const showThinking = document.getElementById('toggle-thinking').checked;
+            showThinking = document.getElementById('toggle-thinking').checked;
             
             isStreaming = true;
             btn.disabled = true;
-            btn.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span><span>分析中...</span>';
+            btn.innerHTML = '<span>⏳</span><span>分析中...</span>';
             
             responseArea.innerHTML = '';
             responseArea.classList.add('loading');
-            accumulatedContent = '';
             lastMessageDiv = null;
             
             const titles = {
@@ -547,12 +636,26 @@
                 
                 responseArea.classList.remove('loading');
                 
+                let buffer = '';
+                
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
-                    const chunk = decoder.decode(value, { stream: true });
-                    processStreamChunk(chunk, showThinking);
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    let lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    
+                    for (const line of lines) {
+                        if (line.trim()) {
+                            processStreamChunk(line.trim());
+                        }
+                    }
+                }
+                
+                if (buffer.trim()) {
+                    processStreamChunk(buffer.trim());
                 }
                 
             } catch (error) {
@@ -564,45 +667,35 @@
             }
         });
 
-        // 处理流式数据块
-        function processStreamChunk(chunk, showThinking) {
-            const responseArea = document.getElementById('response-area');
-            
-            // 检测消息类型
+        function processStreamChunk(chunk) {
             if (chunk.startsWith('🔍') || chunk.startsWith('✅') || chunk.startsWith('📋') || 
                 chunk.startsWith('📦') || chunk.startsWith('🤝') || chunk.startsWith('🤖') ||
                 chunk.startsWith('━━━━━━━━━━━━━━━━')) {
-                // 步骤信息
                 addMessage('step', chunk);
             } else if (chunk.startsWith('❌')) {
-                // 错误信息
                 addMessage('error', chunk);
-            } else if (accumulatedContent.startsWith('<') || detectThinking(accumulatedContent + chunk)) {
-                // 可能是思考过程
-                if (showThinking) {
-                    addMessage('thinking', chunk);
-                }
-                accumulatedContent += chunk;
+            } else if (chunk.startsWith('**') || chunk.startsWith('#') || chunk.startsWith('- ') || 
+                       chunk.startsWith('1.') || chunk.startsWith('```') || chunk.startsWith('|')) {
+                appendToContent(chunk);
             } else {
-                // 最终内容
-                if (lastMessageDiv && lastMessageDiv.classList.contains('message-content')) {
-                    lastMessageDiv.textContent += chunk;
-                } else {
-                    addMessage('content', chunk);
-                }
-                accumulatedContent = '';
+                appendToContent(chunk);
             }
             
-            responseArea.scrollTop = responseArea.scrollHeight;
+            scrollToBottom();
         }
 
-        // 检测是否是思考过程
-        function detectThinking(text) {
-            const thinkingIndicators = ['思考', '分析', '推理', '考虑', '可能', '或许', '看起来', '我认为'];
-            return thinkingIndicators.some(indicator => text.includes(indicator)) && text.length < 200;
+        function appendToContent(text) {
+            if (lastMessageDiv && lastMessageDiv.classList.contains('message-content')) {
+                const contentDiv = lastMessageDiv.querySelector('.markdown-body');
+                if (contentDiv) {
+                    contentDiv.innerHTML += text;
+                    contentDiv.innerHTML = marked.parse(contentDiv.innerHTML);
+                }
+            } else {
+                addMessage('content', text);
+            }
         }
 
-        // 添加消息
         function addMessage(type, content) {
             const responseArea = document.getElementById('response-area');
             const messageDiv = document.createElement('div');
@@ -617,23 +710,49 @@
                 error: '❌ 错误'
             };
             
-            messageDiv.innerHTML = `<div class="message-header"><span>${typeLabels[type]}</span><span class="message-time">${time}</span></div>${content}`;
+            let contentHtml;
+            if (type === 'content') {
+                contentHtml = `<div class="markdown-body">${marked.parse(content)}</div>`;
+            } else {
+                contentHtml = `<pre style="white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit;">${escapeHtml(content)}</pre>`;
+            }
+            
+            messageDiv.innerHTML = `
+                <div class="message-header">
+                    <span>${typeLabels[type]}</span>
+                    <span class="message-time">${time}</span>
+                </div>
+                ${contentHtml}
+            `;
             responseArea.appendChild(messageDiv);
             
             lastMessageDiv = messageDiv;
+            
+            scrollToBottom();
         }
 
-        // 清空按钮
+        function scrollToBottom() {
+            const responseArea = document.getElementById('response-area');
+            responseArea.scrollTo({
+                top: responseArea.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         document.getElementById('btn-clear').addEventListener('click', () => {
             if (isStreaming) return;
             
             document.getElementById('response-area').innerHTML = '<div class="message message-step">请选择智能体并点击"开始分析"按钮，智能体将实时返回分析结果...</div>';
             document.getElementById('response-title').textContent = '等待分析...';
-            accumulatedContent = '';
             lastMessageDiv = null;
         });
 
-        // 构建请求数据
         function buildRequestData() {
             switch (currentAgent) {
                 case 'allocation':
@@ -674,7 +793,6 @@
             }
         }
 
-        // 解析逗号分隔列表
         function parseCommaList(text) {
             if (!text || !text.trim()) return null;
             return text.split(',').map(item => item.trim()).filter(item => item);
