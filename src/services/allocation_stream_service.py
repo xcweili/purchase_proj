@@ -167,12 +167,19 @@ class AllocationStreamService:
                 "计划ID": plan.get('planId', ''),
                 "物料编码": plan.get('materialCode', ''),
                 "物料描述": plan.get('materialDesc', ''),
-                "需求数量": p.get('demand', 0),
+                "需求数量": float(p.get('demand', 0) or 0),
                 "目标仓库": plan.get('warehouseCode', ''),
                 "技术规范ID": plan.get('techSpecId', ''),
                 "匹配状态": p.get('status', ''),
-                "总可用库存": p.get('total_available', 0),
-                "调配方案": p.get('matches', [])
+                "总可用库存": float(p.get('total_available', 0) or 0),
+                "调配方案": [{
+                    'source_warehouse': m.get('source_warehouse', ''),
+                    'source_warehouse_name': m.get('source_warehouse_name', ''),
+                    'allocate_qty': float(m.get('allocate_qty', 0) or 0),
+                    'stock_qty': float(m.get('stock_qty', 0) or 0),
+                    'distance': str(m.get('distance', '')),
+                    'source_type': m.get('source_type', '')
+                } for m in p.get('matches', [])]
             })
 
         prompt = f"""你是一个专业的电力物资调配专家。我将提供需求计划和库存数据，请你分析并给出最优的调配方案。

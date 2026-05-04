@@ -173,12 +173,18 @@ class InventoryAnalysisStreamService:
                 "库存层级": d.get('inventory_level', ''),
                 "物料编码": d.get('material_code', ''),
                 "技术规范ID": d.get('tech_id', ''),
-                "当前库存": d.get('current_stock', 0),
-                "在途库存": d.get('in_transit_stock', 0),
+                "当前库存": float(d.get('current_stock', 0) or 0),
+                "在途库存": float(d.get('in_transit_stock', 0) or 0),
                 "物料描述": d.get('material_desc', ''),
             }
             if not d.get('is_cached') and d.get('outbound_data'):
-                item["历史出库"] = d.get('outbound_data', [])[:10]
+                outbound_list = []
+                for ob in d.get('outbound_data', [])[:10]:
+                    outbound_list.append({
+                        "月份": str(ob.get('month', '')),
+                        "出库数量": float(ob.get('outbound_qty', 0) or 0)
+                    })
+                item["历史出库"] = outbound_list
             data_formatted.append(item)
 
         prompt = f"""你是一个专业的电力物资库存分析专家。我将提供仓库×物料×技术规范ID组合的库存数据和历史出库数据，请你分析库存状况并给出建议。
