@@ -674,9 +674,6 @@
                 addMessage('step', chunk);
             } else if (chunk.startsWith('❌')) {
                 addMessage('error', chunk);
-            } else if (chunk.startsWith('**') || chunk.startsWith('#') || chunk.startsWith('- ') || 
-                       chunk.startsWith('1.') || chunk.startsWith('```') || chunk.startsWith('|')) {
-                appendToContent(chunk);
             } else {
                 appendToContent(chunk);
             }
@@ -686,10 +683,13 @@
 
         function appendToContent(text) {
             if (lastMessageDiv && lastMessageDiv.classList.contains('message-content')) {
+                const originalSpan = lastMessageDiv.querySelector('.original-content');
                 const contentDiv = lastMessageDiv.querySelector('.markdown-body');
-                if (contentDiv) {
-                    contentDiv.innerHTML += text;
-                    contentDiv.innerHTML = marked.parse(contentDiv.innerHTML);
+                if (originalSpan && contentDiv) {
+                    const originalContent = originalSpan.textContent;
+                    const newContent = originalContent + text;
+                    originalSpan.textContent = newContent;
+                    contentDiv.innerHTML = marked.parse(newContent);
                 }
             } else {
                 addMessage('content', text);
@@ -712,7 +712,7 @@
             
             let contentHtml;
             if (type === 'content') {
-                contentHtml = `<div class="markdown-body">${marked.parse(content)}</div>`;
+                contentHtml = `<span style="display: none;" class="original-content">${escapeHtml(content)}</span><div class="markdown-body">${marked.parse(content)}</div>`;
             } else {
                 contentHtml = `<pre style="white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit;">${escapeHtml(content)}</pre>`;
             }
