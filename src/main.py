@@ -4,6 +4,8 @@ import json
 import sqlite3
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.responses import StreamingResponse
@@ -47,6 +49,15 @@ supplier_match_agent = SupplierMatchAgent(real_db, llm_service.chat_stream, llm_
 allocation_service = AllocationService(real_db, allocation_agent)
 inventory_analysis_service = InventoryAnalysisService(real_db, inventory_analysis_agent)
 supplier_match_service = SupplierMatchService(real_db, supplier_match_agent)
+
+# ============================================
+# 流式服务实例化
+# ============================================
+from .services import AllocationStreamService, InventoryAnalysisStreamService, SupplierMatchStreamService
+
+allocation_stream_service = AllocationStreamService(real_db, llm_service.chat_stream)
+inventory_analysis_stream_service = InventoryAnalysisStreamService(real_db, llm_service.chat_stream)
+supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.chat_stream)
 
 # ============================================
 # 请求模型
@@ -190,6 +201,85 @@ async def get_supplier_match_results(
     }
 
 # ============================================
+# 智能调配接口 - 流式版本
+# ============================================
+@app.post("/api/allocation/match/stream")
+async def allocation_match_stream(request: AllocationMatchRequest):
+    """智能调配接口 - 流式输出"""
+    strategy_val = request.strategy if request.strategy else "time"
+    
+    async def response_generator():
+        async for chunk in allocation_stream_service.stream_analyze(
+            strategy=strategy_val,
+            warehouse_code=request.warehouseCode or "",
+            source_type=request.sourceType or "",
+            project_unit=request.projectUnit or "",
+            demand_start_date=request.demandStartDate or "",
+            demand_end_date=request.demandEndDate or "",
+            plan_type=request.planType or "",
+            material_codes=request.materialCodes
+        ):
+            yield chunk
+    
+    return StreamingResponse(
+        response_generator(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# ============================================
+# 库存分析接口 - 流式版本
+# ============================================
+@app.post("/api/inventory/analyze/stream")
+async def inventory_analyze_stream(request: InventoryAnalysisRequest):
+    """库存分析接口 - 流式输出"""
+    
+    async def response_generator():
+        async for chunk in inventory_analysis_stream_service.stream_analyze(
+            start_date=request.startDate,
+            end_date=request.endDate,
+            inventory_levels=request.inventoryLevels,
+            material_codes=request.materialCodes,
+            season_factor_weight=request.seasonFactorWeight,
+            safety_redundancy_ratio=request.safetyRedundancyRatio
+        ):
+            yield chunk
+    
+    return StreamingResponse(
+        response_generator(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# ============================================
+# 供应商匹配接口 - 流式版本
+# ============================================
+@app.post("/api/supplier/match/stream")
+async def supplier_match_stream(request: SupplierMatchRequest):
+    """供应商匹配接口 - 流式输出"""
+    
+    async def response_generator():
+        async for chunk in supplier_match_stream_service.stream_analyze(
+            input_plans=request.plans
+        ):
+            yield chunk
+    
+    return StreamingResponse(
+        response_generator(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# ============================================
 # 对话接口
 # ============================================
 @app.post("/api/chat/stream")
@@ -218,3 +308,13 @@ async def chat_stream(request: ChatRequest):
 async def health_check():
     """健康检查接口"""
     return {"status": "ok"}
+
+# ============================================
+# 静态文件服务
+# ============================================
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+async def root():
+    """首页 - 流式交互界面"""
+    return FileResponse("static/index.html")

@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>采购管理智能体 - 流式交互</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 16px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .panel-body {
+            padding: 20px;
+        }
+
+        /* 智能体选择 */
+        .agent-tabs {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .agent-tab {
+            padding: 14px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1rem;
+        }
+
+        .agent-tab:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+
+        .agent-tab.active {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .agent-tab .icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .agent-tab.active .icon {
+            background: rgba(255,255,255,0.2);
+        }
+
+        /* 参数输入 */
+        .param-group {
+            margin-bottom: 16px;
+        }
+
+        .param-label {
+            display: block;
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .param-input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            transition: border-color 0.3s ease;
+            background: #fafafa;
+        }
+
+        .param-input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+        }
+
+        .param-input::placeholder {
+            color: #aaa;
+        }
+
+        .param-hint {
+            font-size: 0.75rem;
+            color: #999;
+            margin-top: 4px;
+        }
+
+        /* 按钮 */
+        .btn {
+            width: 100%;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #666;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        /* 响应区域 */
+        .response-area {
+            min-height: 500px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            color: #333;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-y: auto;
+            border: 2px solid #e0e0e0;
+        }
+
+        .response-area.loading {
+            background: linear-gradient(90deg, #f8f9fa 25%, #e9ecef 50%, #f8f9fa 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .response-area.error {
+            color: #dc3545;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .response-title {
+            font-weight: 600;
+            color: #333;
+            font-size: 1.1rem;
+        }
+
+        .response-time {
+            font-size: 0.8rem;
+            color: #999;
+        }
+
+        .typing-indicator {
+            display: inline-flex;
+            gap: 4px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #667eea;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a1a1a1;
+        }
+
+        /* 响应式 */
+        @media (max-width: 900px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 1.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ 采购管理智能体</h1>
+            <p>流式交互分析 - 实时获取智能体分析结果</p>
+        </div>
+
+        <div class="main-content">
+            <!-- 左侧面板：参数输入 -->
+            <div class="panel">
+                <div class="panel-header">
+                    🎯 智能体选择与参数配置
+                </div>
+                <div class="panel-body">
+                    <!-- 智能体选择 -->
+                    <div class="agent-tabs">
+                        <div class="agent-tab active" data-agent="allocation">
+                            <span class="icon">📦</span>
+                            <span>智能调配</span>
+                        </div>
+                        <div class="agent-tab" data-agent="inventory">
+                            <span class="icon">📊</span>
+                            <span>库存分析</span>
+                        </div>
+                        <div class="agent-tab" data-agent="supplier">
+                            <span class="icon">🤝</span>
+                            <span>供应商匹配</span>
+                        </div>
+                    </div>
+
+                    <!-- 参数表单 -->
+                    <div id="params-form">
+                        <!-- 智能调配参数 -->
+                        <div id="allocation-params" class="params-section">
+                            <div class="param-group">
+                                <label class="param-label">调配策略</label>
+                                <input type="text" class="param-input" id="allocation-strategy" placeholder="time/cost/stock/emerg" value="time">
+                                <div class="param-hint">默认: time（时效优先）</div>
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">仓库编码</label>
+                                <input type="text" class="param-input" id="allocation-warehouse" placeholder="如: MGA0">
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">物料编码（逗号分隔）</label>
+                                <input type="text" class="param-input" id="allocation-materials" placeholder="如: 500004650,500004651">
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">计划类型</label>
+                                <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划">
+                            </div>
+                        </div>
+
+                        <!-- 库存分析参数 -->
+                        <div id="inventory-params" class="params-section" style="display: none;">
+                            <div class="param-group">
+                                <label class="param-label">开始日期</label>
+                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYYMM">
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">结束日期</label>
+                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYYMM">
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">库存层级（逗号分隔）</label>
+                                <input type="text" class="param-input" id="inventory-levels" placeholder="区域库/周转库/终端库">
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">物料编码（逗号分隔）</label>
+                                <input type="text" class="param-input" id="inventory-materials" placeholder="如: 500004650">
+                            </div>
+                        </div>
+
+                        <!-- 供应商匹配参数 -->
+                        <div id="supplier-params" class="params-section" style="display: none;">
+                            <div class="param-group">
+                                <label class="param-label">计划数据（JSON格式）</label>
+                                <textarea class="param-input" id="supplier-plans" rows="6" placeholder='[{"planId": "P001", "materialCode": "500004650", "demandQty": 100, "unitPrice": 100.0}...]'></textarea>
+                                <div class="param-hint">留空则从数据库获取</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button class="btn btn-primary" id="btn-submit">
+                            <span>🚀</span>
+                            <span>开始分析</span>
+                        </button>
+                        <button class="btn btn-secondary" id="btn-clear">
+                            <span>🗑️</span>
+                            <span>清空</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧面板：响应显示 -->
+            <div class="panel">
+                <div class="panel-header">
+                    📝 智能体分析结果
+                </div>
+                <div class="panel-body">
+                    <div class="response-header">
+                        <span class="response-title" id="response-title">等待分析...</span>
+                        <span class="response-time" id="response-time"></span>
+                    </div>
+                    <div class="response-area" id="response-area">
+                        请选择智能体并点击"开始分析"按钮，智能体将实时返回分析结果...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 当前选中的智能体
+        let currentAgent = 'allocation';
+        let isStreaming = false;
+
+        // 智能体切换
+        document.querySelectorAll('.agent-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (isStreaming) return;
+                
+                document.querySelectorAll('.agent-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentAgent = tab.dataset.agent;
+                
+                // 显示对应参数面板
+                document.querySelectorAll('.params-section').forEach(section => {
+                    section.style.display = 'none';
+                });
+                document.getElementById(`${currentAgent}-params`).style.display = 'block';
+                
+                // 更新标题
+                const titles = {
+                    allocation: '智能调配分析',
+                    inventory: '库存分析',
+                    supplier: '供应商匹配'
+                };
+                document.getElementById('response-title').textContent = '等待分析...';
+            });
+        });
+
+        // 提交按钮
+        document.getElementById('btn-submit').addEventListener('click', async () => {
+            if (isStreaming) return;
+            
+            const btn = document.getElementById('btn-submit');
+            const responseArea = document.getElementById('response-area');
+            
+            // 设置加载状态
+            isStreaming = true;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span><span>分析中...</span>';
+            responseArea.innerHTML = '';
+            responseArea.classList.add('loading');
+            document.getElementById('response-time').textContent = new Date().toLocaleString('zh-CN');
+            
+            // 更新标题
+            const titles = {
+                allocation: '智能调配分析',
+                inventory: '库存分析',
+                supplier: '供应商匹配'
+            };
+            document.getElementById('response-title').textContent = titles[currentAgent];
+            
+            try {
+                const url = `/api/${currentAgent}/${currentAgent === 'allocation' ? 'match' : currentAgent === 'inventory' ? 'analyze' : 'match'}/stream`;
+                const data = buildRequestData();
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                
+                responseArea.classList.remove('loading');
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    responseArea.textContent += chunk;
+                    responseArea.scrollTop = responseArea.scrollHeight;
+                }
+                
+            } catch (error) {
+                responseArea.classList.remove('loading');
+                responseArea.classList.add('error');
+                responseArea.textContent = `❌ 分析失败: ${error.message}`;
+            } finally {
+                isStreaming = false;
+                btn.disabled = false;
+                btn.innerHTML = '<span>🚀</span><span>开始分析</span>';
+            }
+        });
+
+        // 清空按钮
+        document.getElementById('btn-clear').addEventListener('click', () => {
+            if (isStreaming) return;
+            
+            document.getElementById('response-area').textContent = '请选择智能体并点击"开始分析"按钮，智能体将实时返回分析结果...';
+            document.getElementById('response-area').classList.remove('error', 'loading');
+            document.getElementById('response-title').textContent = '等待分析...';
+            document.getElementById('response-time').textContent = '';
+        });
+
+        // 构建请求数据
+        function buildRequestData() {
+            switch (currentAgent) {
+                case 'allocation':
+                    return {
+                        strategy: document.getElementById('allocation-strategy').value || 'time',
+                        warehouseCode: document.getElementById('allocation-warehouse').value || '',
+                        sourceType: '',
+                        projectUnit: '',
+                        demandStartDate: '',
+                        demandEndDate: '',
+                        planType: document.getElementById('allocation-plan-type').value || '',
+                        materialCodes: parseCommaList(document.getElementById('allocation-materials').value)
+                    };
+                case 'inventory':
+                    return {
+                        startDate: document.getElementById('inventory-start').value || null,
+                        endDate: document.getElementById('inventory-end').value || null,
+                        inventoryLevels: parseCommaList(document.getElementById('inventory-levels').value),
+                        materialCodes: parseCommaList(document.getElementById('inventory-materials').value),
+                        seasonFactorWeight: null,
+                        safetyRedundancyRatio: null
+                    };
+                case 'supplier':
+                    const plansText = document.getElementById('supplier-plans').value;
+                    let plans = null;
+                    if (plansText.trim()) {
+                        try {
+                            plans = JSON.parse(plansText);
+                        } catch (e) {
+                            console.warn('Invalid JSON, sending empty');
+                        }
+                    }
+                    return {
+                        plans: plans
+                    };
+                default:
+                    return {};
+            }
+        }
+
+        // 解析逗号分隔列表
+        function parseCommaList(text) {
+            if (!text || !text.trim()) return null;
+            return text.split(',').map(item => item.trim()).filter(item => item);
+        }
+    </script>
+</body>
+</html>

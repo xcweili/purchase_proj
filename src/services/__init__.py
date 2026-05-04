@@ -5,6 +5,9 @@ from .llm_service import llm_service, LLMService
 from .allocation_service import AllocationService
 from .inventory_analysis_service import InventoryAnalysisService
 from .supplier_match_service import SupplierMatchService
+from .allocation_stream_service import AllocationStreamService
+from .inventory_analysis_stream_service import InventoryAnalysisStreamService
+from .supplier_match_stream_service import SupplierMatchStreamService
 
 __all__ = [
     'real_db',
@@ -14,4 +17,7 @@ __all__ = [
     'AllocationService',
     'InventoryAnalysisService',
     'SupplierMatchService',
+    'AllocationStreamService',
+    'InventoryAnalysisStreamService',
+    'SupplierMatchStreamService',
 ]
