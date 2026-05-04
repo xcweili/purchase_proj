@@ -566,9 +566,14 @@
         let showThinking = true;
         let lastMessageDiv = null;
 
+        // 配置marked库
         marked.setOptions({
             breaks: true,
-            gfm: true
+            gfm: true,
+            pedantic: false,
+            sanitize: false,
+            smartLists: true,
+            smartypants: true
         });
 
         document.querySelectorAll('.agent-tab').forEach(tab => {
@@ -686,10 +691,20 @@
                 const originalSpan = lastMessageDiv.querySelector('.original-content');
                 const contentDiv = lastMessageDiv.querySelector('.markdown-body');
                 if (originalSpan && contentDiv) {
-                    const originalContent = originalSpan.textContent;
-                    const newContent = originalContent + text;
-                    originalSpan.textContent = newContent;
-                    contentDiv.innerHTML = marked.parse(newContent);
+                    // 获取当前原始内容并拼接新内容
+                    let currentContent = originalSpan.textContent || '';
+                    currentContent += text;
+                    
+                    // 更新隐藏的原始内容
+                    originalSpan.textContent = currentContent;
+                    
+                    // 解析并更新显示
+                    try {
+                        contentDiv.innerHTML = marked.parse(currentContent);
+                    } catch (e) {
+                        console.error('Markdown parse error:', e);
+                        contentDiv.textContent = currentContent;
+                    }
                 }
             } else {
                 addMessage('content', text);
@@ -712,7 +727,7 @@
             
             let contentHtml;
             if (type === 'content') {
-                contentHtml = `<span style="display: none;" class="original-content">${escapeHtml(content)}</span><div class="markdown-body">${marked.parse(content)}</div>`;
+                contentHtml = `<span style="display: none;" class="original-content">${content}</span><div class="markdown-body">${marked.parse(content)}</div>`;
             } else {
                 contentHtml = `<pre style="white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit;">${escapeHtml(content)}</pre>`;
             }
