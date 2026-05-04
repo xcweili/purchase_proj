@@ -18,10 +18,9 @@ class InventoryAnalysisStreamService:
     async def stream_analyze(self, start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, material_codes: List[str] = None,
                             season_factor_weight: float = None, safety_redundancy_ratio: float = None):
-        """流式分析库存"""
+        """流式分析库存 - 完全复用原服务逻辑"""
         try:
-            # 步骤1：获取仓库信息
-            yield "🔍 [步骤 1/4] 正在查询仓库信息...\n"
+            yield "🔍 [步骤 1/6] 正在查询仓库信息...\n"
             warehouse_info = await self._service._get_warehouse_info_by_levels(inventory_levels)
             warehouse_codes = list(warehouse_info.keys())
 
@@ -29,61 +28,130 @@ class InventoryAnalysisStreamService:
                 yield "📦 未查询到符合条件的仓库。\n"
                 return
 
-            yield f"✅ [步骤 1/4] 已获取 {len(warehouse_codes)} 个仓库\n"
+            yield f"✅ [步骤 1/6] 已获取 {len(warehouse_codes)} 个仓库\n"
             yield f"   仓库列表: {', '.join(warehouse_codes[:5])}"
             if len(warehouse_codes) > 5:
                 yield f" ... 还有{len(warehouse_codes) - 5}个"
             yield "\n\n"
 
-            # 步骤2：获取物料编码
-            yield "🔍 [步骤 2/4] 正在获取物料编码列表...\n"
+            yield "🔍 [步骤 2/6] 正在获取物料编码列表...\n"
             if not material_codes or len(material_codes) == 0:
                 material_codes = await self._service._get_all_material_codes()
-
-            if not material_codes:
-                yield "📋 未获取到物料编码。\n"
-                return
-
-            yield f"✅ [步骤 2/4] 已获取 {len(material_codes)} 个物料编码\n"
+            yield f"✅ [步骤 2/6] 共有 {len(material_codes)} 个物料编码\n"
             yield f"   物料: {', '.join(material_codes[:5])}"
             if len(material_codes) > 5:
                 yield f" ... 还有{len(material_codes) - 5}个"
             yield "\n\n"
 
-            # 步骤3：查询库存数据
-            yield "🔍 [步骤 3/4] 正在查询库存数据...\n"
-            all_stocks = []
-            all_outbound = []
-
-            for warehouse_code in warehouse_codes[:10]:
-                for material_code in material_codes[:20]:
-                    tech_ids = await self._service._tech_ids_by_warehouse_material(
+            yield "🔍 [步骤 3/6] 正在构建仓库×物料×tech_id组合...\n"
+            all_combinations = []
+            combo_count = 0
+            for warehouse_code in warehouse_codes:
+                for material_code in material_codes:
+                    tech_ids = await self._service._get_tech_ids_by_warehouse_material(
                         warehouse_code, material_code, start_date, end_date
                     )
+                    if not tech_ids:
+                        continue
                     for tech_id in tech_ids:
-                        stock = await self._service._get_current_stock(warehouse_code, material_code, tech_id)
-                        if stock:
-                            all_stocks.append(stock)
-                        outbound = await self._service._get_historical_outbound(
-                            warehouse_code, material_code, tech_id, start_date, end_date
-                        )
-                        if outbound:
-                            all_outbound.append(outbound)
+                        all_combinations.append({
+                            'warehouse_code': warehouse_code,
+                            'material_code': material_code,
+                            'tech_id': tech_id
+                        })
+                        combo_count += 1
+                        if combo_count <= 3:
+                            yield f"   组合预览: {warehouse_code} + {material_code} + {tech_id}\n"
 
-            yield f"✅ [步骤 3/4] 已获取 {len(all_stocks)} 条库存数据, {len(all_outbound)} 条出库数据\n\n"
+            yield f"✅ [步骤 3/6] 共有 {len(all_combinations)} 个有效组合\n\n"
 
-            if not all_stocks:
-                yield "📦 暂无库存数据。\n"
+            if not all_combinations:
+                yield "📊 没有找到有效的仓库×物料×tech_id组合。\n"
                 return
+
+            yield "🔍 [步骤 4/6] 正在查询每个组合的当前库存和历史出库数据...\n"
+            analyzed_data = []
+            data_count = 0
+
+            for combo in all_combinations:
+                warehouse_code = combo['warehouse_code']
+                material_code = combo['material_code']
+                tech_id = combo['tech_id']
+
+                if not tech_id:
+                    continue
+
+                warehouse_name = warehouse_info.get(warehouse_code, {}).get('name', '')
+                inventory_level = warehouse_info.get(warehouse_code, {}).get('level', '')
+
+                existing_result = await self._service._get_existing_analysis_result(
+                    warehouse_code, material_code, tech_id, start_date, end_date
+                )
+
+                if existing_result:
+                    analyzed_data.append({
+                        'warehouse_code': warehouse_code,
+                        'warehouse_name': warehouse_name,
+                        'inventory_level': inventory_level,
+                        'material_code': material_code,
+                        'tech_id': tech_id,
+                        'current_stock': existing_result.get('currentStock', 0),
+                        'in_transit_stock': existing_result.get('inTransitStock', 0),
+                        'analysis_result': existing_result,
+                        'is_cached': True
+                    })
+                    continue
+
+                current_stock_data = await self._service._get_current_stock(warehouse_code, material_code, tech_id)
+                outbound_data = await self._service._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date)
+
+                current_stock = 0
+                in_transit_stock = 0
+                material_desc = ''
+                if current_stock_data and len(current_stock_data) > 0:
+                    current_stock = float(current_stock_data[0].get('current_stock', 0) or 0)
+                    in_transit_stock = float(current_stock_data[0].get('in_transit_stock', 0) or 0)
+                    material_desc = current_stock_data[0].get('material_desc', '') or ''
+
+                analyzed_data.append({
+                    'warehouse_code': warehouse_code,
+                    'warehouse_name': warehouse_name,
+                    'inventory_level': inventory_level,
+                    'material_code': material_code,
+                    'tech_id': tech_id,
+                    'current_stock': current_stock,
+                    'in_transit_stock': in_transit_stock,
+                    'material_desc': material_desc,
+                    'outbound_data': outbound_data,
+                    'is_cached': False
+                })
+
+                data_count += 1
+                if data_count <= 3:
+                    yield f"   处理进度: {data_count}/{len(all_combinations)}\n"
+
+            cached_count = sum(1 for d in analyzed_data if d.get('is_cached'))
+            yield f"✅ [步骤 4/6] 处理完成，其中 {cached_count} 个使用缓存\n\n"
+
+            yield "🔍 [步骤 5/6] 正在准备AI分析数据...\n"
+            summary_stats = {
+                'total_combinations': len(analyzed_data),
+                'cached_count': cached_count,
+                'new_analysis_count': len(analyzed_data) - cached_count,
+                'total_current_stock': sum(float(d.get('current_stock', 0) or 0) for d in analyzed_data),
+                'total_in_transit': sum(float(d.get('in_transit_stock', 0) or 0) for d in analyzed_data)
+            }
+            yield f"✅ [步骤 5/6] 汇总统计: 组合={summary_stats['total_combinations']}, 缓存={cached_count}\n\n"
+
+            yield "🔍 [步骤 6/6] 开始AI智能分析...\n"
+            yield f"✅ [步骤 6/6] 数据准备完成\n\n"
 
             yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             yield "🤖 开始AI分析...\n"
             yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-            # 调用LLM分析
-            prompt = self._build_stream_prompt(all_stocks, all_outbound, start_date, end_date,
-                                              inventory_levels, season_factor_weight, safety_redundancy_ratio)
-            system_prompt = "你是一个专业的电力物料库存分析专家，擅长分析库存数据、预测需求并给出合理的补货建议。请用清晰的中文进行分析。"
+            prompt = self._build_stream_prompt(analyzed_data, summary_stats, start_date, end_date)
+            system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
 
             async for chunk in self.llm_stream_func(prompt, system_prompt):
                 yield chunk
@@ -93,73 +161,75 @@ class InventoryAnalysisStreamService:
             import traceback
             yield f"详细信息: {traceback.format_exc()}\n"
 
-    def _build_stream_prompt(self, stocks: List[Dict], outbound: List[Dict],
-                            start_date: str = None, end_date: str = None,
-                            inventory_levels: List[str] = None, season_factor: float = 0.3,
-                            safety_ratio: float = 0.2) -> str:
+    def _build_stream_prompt(self, analyzed_data: List[Dict[str, Any]], summary_stats: Dict[str, Any],
+                           start_date: str, end_date: str) -> str:
         """构建流式接口的prompt"""
 
-        # 周期描述
-        if start_date and end_date:
-            period_desc = f"{start_date} 至 {end_date}"
-        elif start_date:
-            period_desc = f"从 {start_date} 开始"
-        elif end_date:
-            period_desc = f"截至 {end_date}"
-        else:
-            period_desc = "全部历史数据"
+        data_formatted = []
+        for d in analyzed_data:
+            item = {
+                "仓库编码": d.get('warehouse_code', ''),
+                "仓库名称": d.get('warehouse_name', ''),
+                "库存层级": d.get('inventory_level', ''),
+                "物料编码": d.get('material_code', ''),
+                "技术规范ID": d.get('tech_id', ''),
+                "当前库存": d.get('current_stock', 0),
+                "在途库存": d.get('in_transit_stock', 0),
+                "物料描述": d.get('material_desc', ''),
+            }
+            if not d.get('is_cached') and d.get('outbound_data'):
+                item["历史出库"] = d.get('outbound_data', [])[:10]
+            data_formatted.append(item)
 
-        # 库存层级
-        if inventory_levels:
-            levels_desc = ", ".join(inventory_levels)
-        else:
-            levels_desc = "所有层级"
-
-        prompt = f"""你是一个专业的电力物料库存分析专家。我将提供库存数据和历史出库数据，请你进行深度分析并给出专业建议。
+        prompt = f"""你是一个专业的电力物资库存分析专家。我将提供仓库×物料×技术规范ID组合的库存数据和历史出库数据，请你分析库存状况并给出建议。
 
 ## 任务说明
-请分析以下库存数据和历史出库数据，评估库存健康状况，计算合理库存水位，并给出补货建议。
+请分析以下库存数据，结合历史出库模式，判断当前库存是否充足，并给出补货或利库建议。
 
-## 分析参数
-- 分析周期：{period_desc}
-- 库存层级：{levels_desc}
-- 季节因子权重：{season_factor if season_factor else "默认(0.3)"}
-- 安全冗余比例：{safety_ratio if safety_ratio else "默认(0.2)"}
+## 汇总统计
+- 分析组合数量: {summary_stats['total_combinations']}
+- 使用缓存结果: {summary_stats['cached_count']}
+- 新分析数量: {summary_stats['new_analysis_count']}
+- 总当前库存: {summary_stats['total_current_stock']}
+- 总在途库存: {summary_stats['total_in_transit']}
 
-## 当前库存数据
-{json.dumps(stocks[:20], ensure_ascii=False, indent=2)}
+## 时间范围
+- 开始日期: {start_date if start_date else '未指定'}
+- 结束日期: {end_date if end_date else '未指定'}
 
-## 历史出库数据
-{json.dumps(outbound[:50], ensure_ascii=False, indent=2)}
+## 输入数据
+
+### 库存分析数据
+{json.dumps(data_formatted[:30], ensure_ascii=False, indent=2)}
 
 ## 分析要求
 
 请按照以下结构输出详细的分析报告：
 
-1. **库存概览**：总体库存状况概述
+1. **库存概览**：简要描述整体库存状况
 
-2. **库存健康分析**：
-   - 各物料的当前库存水平
-   - 在途库存情况
-   - 库存周转率分析
+2. **重点物料分析**：
+   - 对关键物料的库存情况进行分析
+   - 判断是否存在缺货风险
+   - 分析在途库存的预计到货时间
 
-3. **需求预测**：
-   - 基于历史数据的需求趋势分析
-   - 季节性因素影响评估
+3. **出库模式分析**：
+   - 分析历史出库数据的规律
+   - 识别季节性变化（如有）
+   - 预测未来需求趋势
 
-4. **库存水位计算**：
-   - 高位线、补库线、应急线的计算
-   - 当前库存与水位线的对比分析
+4. **补货建议**：
+   - 哪些物料需要立即补货
+   - 哪些物料可以适当利库
+   - 建议的补货数量和时间
 
-5. **补货建议**：
-   - 需要补货的物料清单
-   - 建议补货数量
-   - 优先级排序
+5. **库存优化建议**：
+   - 如何提高库存周转率
+   - 如何减少库存积压
+   - 安全库存设置建议
 
-6. **风险提示**：
-   - 库存不足风险预警
-   - 库存积压风险预警
+6. **结果汇总**
 
-请用自然、清晰的语言进行分析，让用户能够理解你的分析过程和建议。
+请用自然、清晰的语言进行分析，让用户能够理解你的决策过程。
 """
         return prompt
