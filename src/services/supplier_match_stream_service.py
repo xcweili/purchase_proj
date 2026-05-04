@@ -129,12 +129,32 @@ class SupplierMatchStreamService:
             system_prompt = "你是一个专业的电力物料采购供应商匹配专家，擅长分析供应商协议数据并给出最优的供应商选择方案。请用清晰的中文进行分析。"
 
             async for chunk in self.llm_stream_func(prompt, system_prompt):
-                yield chunk
+                content = self._parse_llm_chunk(chunk)
+                if content:
+                    yield content
 
         except Exception as e:
             yield f"❌ 分析失败: {str(e)}\n"
             import traceback
             yield f"详细信息: {traceback.format_exc()}\n"
+
+    def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
+        """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
+        try:
+            data = json.loads(chunk)
+            choices = data.get('choices', [])
+            if choices:
+                delta = choices[0].get('delta', {})
+                reasoning = delta.get('reasoning_content', '')
+                content = delta.get('content', '')
+                
+                if reasoning:
+                    return f"{reasoning}"
+                elif content:
+                    return content
+        except json.JSONDecodeError:
+            pass
+        return None
 
     def _build_stream_prompt(self, all_supplier_data: List[Dict[str, Any]], supplier_stats: Dict[str, Any]) -> str:
         """构建流式接口的prompt"""

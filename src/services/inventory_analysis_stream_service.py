@@ -154,12 +154,32 @@ class InventoryAnalysisStreamService:
             system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
 
             async for chunk in self.llm_stream_func(prompt, system_prompt):
-                yield chunk
+                content = self._parse_llm_chunk(chunk)
+                if content:
+                    yield content
 
         except Exception as e:
             yield f"❌ 分析失败: {str(e)}\n"
             import traceback
             yield f"详细信息: {traceback.format_exc()}\n"
+
+    def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
+        """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
+        try:
+            data = json.loads(chunk)
+            choices = data.get('choices', [])
+            if choices:
+                delta = choices[0].get('delta', {})
+                reasoning = delta.get('reasoning_content', '')
+                content = delta.get('content', '')
+                
+                if reasoning:
+                    return f"{reasoning}"
+                elif content:
+                    return content
+        except json.JSONDecodeError:
+            pass
+        return None
 
     def _build_stream_prompt(self, analyzed_data: List[Dict[str, Any]], summary_stats: Dict[str, Any],
                            start_date: str, end_date: str) -> str:
