@@ -484,41 +484,41 @@
                             </div>
                             <div class="param-group">
                                 <label class="param-label">仓库编码</label>
-                                <input type="text" class="param-input" id="allocation-warehouse" placeholder="如: MGA0">
+                                <input type="text" class="param-input" id="allocation-warehouse" placeholder="如: MGA0" value="MGA0">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">物料编码（逗号分隔）</label>
-                                <input type="text" class="param-input" id="allocation-materials" placeholder="如: 500004650,500004651">
+                                <input type="text" class="param-input" id="allocation-materials" placeholder="如: 500004650,500004651" value="500004650">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">计划类型</label>
-                                <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划">
+                                <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划" value="">
                             </div>
                         </div>
 
                         <div id="inventory-params" class="params-section" style="display: none;">
                             <div class="param-group">
                                 <label class="param-label">开始日期</label>
-                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYYMM">
+                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYYMM" value="202201">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">结束日期</label>
-                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYYMM">
+                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYYMM" value="202512">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">库存层级（逗号分隔）</label>
-                                <input type="text" class="param-input" id="inventory-levels" placeholder="区域库/周转库/终端库">
+                                <input type="text" class="param-input" id="inventory-levels" placeholder="区域库/周转库/终端库" value="周转库">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">物料编码（逗号分隔）</label>
-                                <input type="text" class="param-input" id="inventory-materials" placeholder="如: 500004650">
+                                <input type="text" class="param-input" id="inventory-materials" placeholder="如: 500004650" value="500021433">
                             </div>
                         </div>
 
                         <div id="supplier-params" class="params-section" style="display: none;">
                             <div class="param-group">
                                 <label class="param-label">计划数据（JSON格式）</label>
-                                <textarea class="param-input" id="supplier-plans" rows="6" placeholder='[{"planId": "P001", "materialCode": "500004650", "demandQty": 100, "unitPrice": 100.0}...]'></textarea>
+                                <textarea class="param-input" id="supplier-plans" rows="6" placeholder='[{"planId": "P001", "materialCode": "500004650", "demandQty": 100, "unitPrice": 100.0}...]'>[{"planId": "1", "materialCode": "001001002", "materialDesc": "物料编码001001002-物料描述明细", "demandQty": 100, "warehouseCode": "WH001", "techSpecId": "TECH0000000001"}]</textarea>
                                 <div class="param-hint">留空则从数据库获取</div>
                             </div>
                         </div>
