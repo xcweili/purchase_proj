@@ -69,10 +69,10 @@ class AllocationStreamService:
 
             yield f"✅ [步骤 3/6] 已获取 {len(stocks)} 条库存记录\n\n"
             yield f"📦 库存预览（前5条）：\n"
+            stock_lines = []
             for i, stock in enumerate(stocks[:5], 1):
-                yield f"  {i}. 仓库: {stock.get('loc_code', '')}, "
-                yield f"物料: {stock.get('material_code', '')}, "
-                yield f"库存: {stock.get('stock_qty', 0)}\n"
+                stock_lines.append(f"  {i}. 仓库: {stock.get('loc_code', '')}, 物料: {stock.get('material_code', '')}, 库存: {stock.get('stock_qty', 0)}")
+            yield "\n".join(stock_lines) + "\n"
             if len(stocks) > 5:
                 yield f"  ... 还有 {len(stocks) - 5} 条库存记录\n"
             yield "\n"
@@ -137,7 +137,7 @@ class AllocationStreamService:
             none_match = sum(1 for p in processed_plans if p['status'] == 'none')
 
             yield f"✅ [步骤 5/6] 处理完成\n"
-            yield f"   完全匹配: {full_match}, 部分匹配: {partial_match}, 无匹配: {none_match}\n\n"
+            yield f"📊   完全匹配: {full_match}, 部分匹配: {partial_match}, 无匹配: {none_match}\n\n"
 
             yield "🔍 [步骤 6/6] 正在构建AI分析数据...\n"
             yield f"✅ [步骤 6/6] 数据准备完成，开始AI分析\n\n"
@@ -174,7 +174,8 @@ class AllocationStreamService:
                 elif content:
                     return content
         except json.JSONDecodeError:
-            pass
+            # 如果不是JSON格式，直接返回原始内容
+            return chunk.strip()
         return None
 
     def _build_stream_prompt(self, processed_plans: List[Dict[str, Any]], strategy: str, target_warehouse: str) -> str:

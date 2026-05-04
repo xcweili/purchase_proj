@@ -565,6 +565,8 @@
         let isStreaming = false;
         let showThinking = true;
         let lastMessageDiv = null;
+        let pendingContent = '';
+        let parseTimeout = null;
 
         // 配置marked库
         marked.setOptions({
@@ -647,20 +649,23 @@
                     const { done, value } = await reader.read();
                     if (done) break;
                     
-                    buffer += decoder.decode(value, { stream: true });
-                    
-                    let lines = buffer.split('\n');
-                    buffer = lines.pop();
-                    
-                    for (const line of lines) {
-                        if (line.trim()) {
-                            processStreamChunk(line.trim());
-                        }
-                    }
+                    const chunk = decoder.decode(value, { stream: true });
+                    processStreamChunk(chunk);
                 }
                 
-                if (buffer.trim()) {
-                    processStreamChunk(buffer.trim());
+                // 流结束后，强制进行一次最终解析
+                if (parseTimeout) {
+                    clearTimeout(parseTimeout);
+                }
+                if (lastMessageDiv && lastMessageDiv.classList.contains('message-content') && pendingContent) {
+                    const contentDiv = lastMessageDiv.querySelector('.markdown-body');
+                    if (contentDiv) {
+                        try {
+                            contentDiv.innerHTML = marked.parse(pendingContent);
+                        } catch (e) {
+                            console.error('Final markdown parse error:', e);
+                        }
+                    }
                 }
                 
             } catch (error) {
@@ -673,42 +678,47 @@
         });
 
         function processStreamChunk(chunk) {
-            if (chunk.startsWith('🔍') || chunk.startsWith('✅') || chunk.startsWith('📋') || 
-                chunk.startsWith('📦') || chunk.startsWith('🤝') || chunk.startsWith('🤖') ||
-                chunk.startsWith('━━━━━━━━━━━━━━━━')) {
+            // 检查是否是步骤信息（以特定emoji开头）
+            const stepPrefixes = ['🔍', '✅', '📋', '📦', '🤝', '🤖', '📊', '━━━━━━━━━━━━━━━━'];
+            const isStep = stepPrefixes.some(prefix => chunk.startsWith(prefix));
+            
+            if (isStep) {
                 addMessage('step', chunk);
             } else if (chunk.startsWith('❌')) {
                 addMessage('error', chunk);
             } else {
+                // LLM返回的内容，直接追加到content
                 appendToContent(chunk);
             }
-            
-            scrollToBottom();
         }
 
         function appendToContent(text) {
-            if (lastMessageDiv && lastMessageDiv.classList.contains('message-content')) {
-                const originalSpan = lastMessageDiv.querySelector('.original-content');
-                const contentDiv = lastMessageDiv.querySelector('.markdown-body');
-                if (originalSpan && contentDiv) {
-                    // 获取当前原始内容并拼接新内容
-                    let currentContent = originalSpan.textContent || '';
-                    currentContent += text;
-                    
-                    // 更新隐藏的原始内容
-                    originalSpan.textContent = currentContent;
-                    
-                    // 解析并更新显示
-                    try {
-                        contentDiv.innerHTML = marked.parse(currentContent);
-                    } catch (e) {
-                        console.error('Markdown parse error:', e);
-                        contentDiv.textContent = currentContent;
-                    }
-                }
-            } else {
+            if (!lastMessageDiv || !lastMessageDiv.classList.contains('message-content')) {
+                lastMessageDiv = null;
                 addMessage('content', text);
+                return;
             }
+            
+            const originalSpan = lastMessageDiv.querySelector('.original-content');
+            const contentDiv = lastMessageDiv.querySelector('.markdown-body');
+            
+            if (!originalSpan || !contentDiv) {
+                addMessage('content', text);
+                return;
+            }
+            
+            // 累积内容
+            pendingContent += text;
+            originalSpan.textContent = pendingContent;
+            
+            // 立即更新显示（打字机效果）
+            try {
+                contentDiv.innerHTML = marked.parse(pendingContent);
+            } catch (e) {
+                console.error('Markdown parse error:', e);
+                contentDiv.textContent = pendingContent;
+            }
+            scrollToBottom();
         }
 
         function addMessage(type, content) {
@@ -727,6 +737,8 @@
             
             let contentHtml;
             if (type === 'content') {
+                // 重置累积内容
+                pendingContent = content;
                 contentHtml = `<span style="display: none;" class="original-content">${content}</span><div class="markdown-body">${marked.parse(content)}</div>`;
             } else {
                 contentHtml = `<pre style="white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit;">${escapeHtml(content)}</pre>`;

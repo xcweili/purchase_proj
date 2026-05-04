@@ -84,24 +84,6 @@ class InventoryAnalysisStreamService:
                 warehouse_name = warehouse_info.get(warehouse_code, {}).get('name', '')
                 inventory_level = warehouse_info.get(warehouse_code, {}).get('level', '')
 
-                existing_result = await self._service._get_existing_analysis_result(
-                    warehouse_code, material_code, tech_id, start_date, end_date
-                )
-
-                if existing_result:
-                    analyzed_data.append({
-                        'warehouse_code': warehouse_code,
-                        'warehouse_name': warehouse_name,
-                        'inventory_level': inventory_level,
-                        'material_code': material_code,
-                        'tech_id': tech_id,
-                        'current_stock': existing_result.get('currentStock', 0),
-                        'in_transit_stock': existing_result.get('inTransitStock', 0),
-                        'analysis_result': existing_result,
-                        'is_cached': True
-                    })
-                    continue
-
                 current_stock_data = await self._service._get_current_stock(warehouse_code, material_code, tech_id)
                 outbound_data = await self._service._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date)
 
@@ -130,18 +112,17 @@ class InventoryAnalysisStreamService:
                 if data_count <= 3:
                     yield f"   处理进度: {data_count}/{len(all_combinations)}\n"
 
-            cached_count = sum(1 for d in analyzed_data if d.get('is_cached'))
-            yield f"✅ [步骤 4/6] 处理完成，其中 {cached_count} 个使用缓存\n\n"
+            yield f"✅ [步骤 4/6] 处理完成，共 {len(analyzed_data)} 个组合\n\n"
 
             yield "🔍 [步骤 5/6] 正在准备AI分析数据...\n"
             summary_stats = {
                 'total_combinations': len(analyzed_data),
-                'cached_count': cached_count,
-                'new_analysis_count': len(analyzed_data) - cached_count,
+                'cached_count': 0,
+                'new_analysis_count': len(analyzed_data),
                 'total_current_stock': sum(float(d.get('current_stock', 0) or 0) for d in analyzed_data),
                 'total_in_transit': sum(float(d.get('in_transit_stock', 0) or 0) for d in analyzed_data)
             }
-            yield f"✅ [步骤 5/6] 汇总统计: 组合={summary_stats['total_combinations']}, 缓存={cached_count}\n\n"
+            yield f"✅ [步骤 5/6] 汇总统计: 组合={summary_stats['total_combinations']}\n\n"
 
             yield "🔍 [步骤 6/6] 开始AI智能分析...\n"
             yield f"✅ [步骤 6/6] 数据准备完成\n\n"
@@ -178,7 +159,8 @@ class InventoryAnalysisStreamService:
                 elif content:
                     return content
         except json.JSONDecodeError:
-            pass
+            # 如果不是JSON格式，直接返回原始内容
+            return chunk.strip()
         return None
 
     def _build_stream_prompt(self, analyzed_data: List[Dict[str, Any]], summary_stats: Dict[str, Any],
@@ -212,10 +194,34 @@ class InventoryAnalysisStreamService:
 ## 任务说明
 请分析以下库存数据，结合历史出库模式，判断当前库存是否充足，并给出补货或利库建议。
 
+## 水位线分析方法（非常重要）
+
+**分析步骤：**
+1. **数据挖掘**: 仔细分析历史出库数据，提取关键指标：
+   - 历史最高月出库量
+   - 历史最低月出库量  
+   - 平均月出库量
+   - 季节性波动规律（如有）
+   
+2. **水位线制定**: 根据历史数据分析结果，智能确定三级水位线：
+   - **应急线**: 库存警戒线，低于此线需立即紧急补货
+   - **补库线**: 安全库存线，低于此线建议启动补货流程
+   - **高位线**: 库存上限线，高于此线建议考虑利库
+
+**水位判断标准：**
+   - **紧急状态**: 当前库存 <= 应急线 → **立即紧急补货**
+   - **低水位**: 当前库存 > 应急线 且 <= 补库线 → **立即补库**
+   - **中水位**: 当前库存 > 补库线 且 <= 高位线 → **建议补库**
+   - **高水位**: 当前库存 > 高位线 → **正常**，无需补库，可考虑利库
+
+**考虑因素：**
+- 物料消耗的季节性变化
+- 历史出库的波动幅度
+- 供应商交货周期
+- 物料的重要程度和替代性
+
 ## 汇总统计
 - 分析组合数量: {summary_stats['total_combinations']}
-- 使用缓存结果: {summary_stats['cached_count']}
-- 新分析数量: {summary_stats['new_analysis_count']}
 - 总当前库存: {summary_stats['total_current_stock']}
 - 总在途库存: {summary_stats['total_in_transit']}
 
@@ -242,18 +248,23 @@ class InventoryAnalysisStreamService:
 # 电力物资库存分析报告
 
 ## 一、库存概览
-简要描述整体库存状况
+简要描述整体库存状况，包括库存总量、在途库存等
 
 ## 二、重点物料分析
 
-### 库存明细表
-| 物料编码 | 仓库编码 | 当前库存 | 在途库存 | 库存层级 |
-|---------|---------|---------|---------|---------|
-| 示例数据 | WH001 | 100 | 50 | 周转库 |
+### 库存明细表（必须包含水位线）
+| 物料编码 | 仓库编码 | 当前库存 | 应急线 | 补库线 | 高位线 | 水位状态 | 库存层级 |
+|---------|---------|---------|--------|--------|--------|---------|---------|
+| 示例数据 | WH001 | 100 | 30 | 80 | 120 | 高水位 | 周转库 |
 
-### 风险评估
-- 判断是否存在缺货风险
-- 分析在途库存的预计到货时间
+### 水位状态说明
+针对每个物料详细说明：
+- 当前库存数量和在途库存
+- 分析历史出库数据得出的关键指标（最高、最低、平均出库量）
+- 根据历史数据分析制定的三级水位线（应急线、补库线、高位线）
+- 判断当前所处水位（紧急/低/中/高）
+- 是否需要补库及具体补库建议
+- 季节性因素对库存的影响评估
 
 ## 三、出库模式分析
 - 分析历史出库数据的规律
@@ -261,15 +272,18 @@ class InventoryAnalysisStreamService:
 - 预测未来需求趋势
 
 ## 四、补货建议
-- 哪些物料需要立即补货
-- 哪些物料可以适当利库
-- 建议的补货数量和时间
+- 哪些物料需要立即紧急补货（紧急状态）
+- 哪些物料需要立即补货（低水位）
+- 哪些物料需要建议补货（中水位）
+- 哪些物料库存正常，可考虑利库（高水位）
+- 针对每个物料的具体补货数量建议和时间安排
 
 ## 五、库存优化建议
 - 如何提高库存周转率
 - 如何减少库存积压
 - 如何优化库存结构
+- 季节性库存管理策略
 
-请用自然、清晰的语言进行分析，让用户能够理解你的分析过程。
+请用自然、清晰的语言进行分析，重点关注三级水位线（应急线、补库线、高位线）的智能分析和补库建议。
 """
         return prompt

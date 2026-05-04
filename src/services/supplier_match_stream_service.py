@@ -153,7 +153,8 @@ class SupplierMatchStreamService:
                 elif content:
                     return content
         except json.JSONDecodeError:
-            pass
+            # 如果不是JSON格式，直接返回原始内容
+            return chunk.strip()
         return None
 
     def _build_stream_prompt(self, all_supplier_data: List[Dict[str, Any]], supplier_stats: Dict[str, Any]) -> str:

@@ -223,10 +223,13 @@ async def allocation_match_stream(request: AllocationMatchRequest):
     
     return StreamingResponse(
         response_generator(),
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked"
         }
     )
 
@@ -250,10 +253,13 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     
     return StreamingResponse(
         response_generator(),
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked"
         }
     )
 
@@ -272,10 +278,13 @@ async def supplier_match_stream(request: SupplierMatchRequest):
     
     return StreamingResponse(
         response_generator(),
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked"
         }
     )
 
