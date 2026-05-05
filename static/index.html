@@ -329,6 +329,39 @@
             transform: translateX(20px);
         }
 
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .radio-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .radio-label:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+
+        .radio-label.selected {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #f0f4ff 0%, #f0f4ff 100%);
+        }
+
+        .radio-label input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+
         /* Markdown 样式 */
         .markdown-body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -494,6 +527,19 @@
                                 <label class="param-label">计划类型</label>
                                 <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划" value="">
                             </div>
+                            <div class="param-group">
+                                <label class="param-label">分析模式</label>
+                                <div class="radio-group">
+                                    <label class="radio-label selected" data-agent="allocation" data-mode="iterative">
+                                        <input type="radio" name="allocation-analyze-mode" value="iterative" checked>
+                                        <span>🔄 迭代模式：逐个分析计划</span>
+                                    </label>
+                                    <label class="radio-label" data-agent="allocation" data-mode="batch">
+                                        <input type="radio" name="allocation-analyze-mode" value="batch">
+                                        <span>📦 批量模式：一次性分析所有计划</span>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
 
                         <div id="inventory-params" class="params-section" style="display: none;">
@@ -513,6 +559,19 @@
                                 <label class="param-label">物料编码（逗号分隔）</label>
                                 <input type="text" class="param-input" id="inventory-materials" placeholder="如: 500004650" value="500021433">
                             </div>
+                            <div class="param-group">
+                                <label class="param-label">分析模式</label>
+                                <div class="radio-group">
+                                    <label class="radio-label selected" data-agent="inventory" data-mode="iterative">
+                                        <input type="radio" name="inventory-analyze-mode" value="iterative" checked>
+                                        <span>🔄 迭代模式：逐个分析组合</span>
+                                    </label>
+                                    <label class="radio-label" data-agent="inventory" data-mode="batch">
+                                        <input type="radio" name="inventory-analyze-mode" value="batch">
+                                        <span>📦 批量模式：一次性分析所有组合</span>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
 
                         <div id="supplier-params" class="params-section" style="display: none;">
@@ -520,6 +579,19 @@
                                 <label class="param-label">计划数据（JSON格式）</label>
                                 <textarea class="param-input" id="supplier-plans" rows="6" placeholder='[{"planId": "P001", "materialCode": "500004650", "demandQty": 100, "unitPrice": 100.0}...]'>[{"planId": "1", "materialCode": "001001002", "materialDesc": "物料编码001001002-物料描述明细", "demandQty": 100, "warehouseCode": "WH001", "techSpecId": "TECH0000000001"}]</textarea>
                                 <div class="param-hint">留空则从数据库获取</div>
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">分析模式</label>
+                                <div class="radio-group">
+                                    <label class="radio-label selected" data-agent="supplier" data-mode="iterative">
+                                        <input type="radio" name="supplier-analyze-mode" value="iterative" checked>
+                                        <span>🔄 迭代模式：逐个分析计划</span>
+                                    </label>
+                                    <label class="radio-label" data-agent="supplier" data-mode="batch">
+                                        <input type="radio" name="supplier-analyze-mode" value="batch">
+                                        <span>📦 批量模式：一次性分析所有计划</span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -576,6 +648,24 @@
             sanitize: false,
             smartLists: true,
             smartypants: true
+        });
+
+        // 初始化分析模式选择
+        document.querySelectorAll('.radio-label').forEach(label => {
+            label.addEventListener('click', () => {
+                const agent = label.dataset.agent;
+                const mode = label.dataset.mode;
+                
+                document.querySelectorAll(`.radio-label[data-agent="${agent}"]`).forEach(l => {
+                    l.classList.remove('selected');
+                    const input = l.querySelector('input');
+                    if (input) input.checked = false;
+                });
+                
+                label.classList.add('selected');
+                const selectedInput = label.querySelector('input');
+                if (selectedInput) selectedInput.checked = true;
+            });
         });
 
         document.querySelectorAll('.agent-tab').forEach(tab => {
@@ -780,6 +870,11 @@
             lastMessageDiv = null;
         });
 
+        function getAnalyzeMode(agent) {
+            const selected = document.querySelector(`.radio-label.selected[data-agent="${agent}"]`);
+            return selected ? selected.dataset.mode : 'iterative';
+        }
+
         function buildRequestData() {
             switch (currentAgent) {
                 case 'allocation':
@@ -791,7 +886,8 @@
                         demandStartDate: '',
                         demandEndDate: '',
                         planType: document.getElementById('allocation-plan-type').value || '',
-                        materialCodes: parseCommaList(document.getElementById('allocation-materials').value)
+                        materialCodes: parseCommaList(document.getElementById('allocation-materials').value),
+                        analyzeMode: getAnalyzeMode('allocation')
                     };
                 case 'inventory':
                     return {
@@ -800,7 +896,8 @@
                         inventoryLevels: parseCommaList(document.getElementById('inventory-levels').value),
                         materialCodes: parseCommaList(document.getElementById('inventory-materials').value),
                         seasonFactorWeight: null,
-                        safetyRedundancyRatio: null
+                        safetyRedundancyRatio: null,
+                        analyzeMode: getAnalyzeMode('inventory')
                     };
                 case 'supplier':
                     const plansText = document.getElementById('supplier-plans').value;
@@ -813,7 +910,8 @@
                         }
                     }
                     return {
-                        plans: plans
+                        plans: plans,
+                        analyzeMode: getAnalyzeMode('supplier')
                     };
                 default:
                     return {};

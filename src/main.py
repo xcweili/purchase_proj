@@ -71,6 +71,7 @@ class AllocationMatchRequest(BaseModel):
     demandEndDate: str = Field(default="", description="需求结束时间")
     planType: str = Field(default="", description="计划类型")
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
+    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
 
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMM）")
@@ -79,9 +80,11 @@ class InventoryAnalysisRequest(BaseModel):
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
     seasonFactorWeight: Optional[float] = Field(default=None, description="季节因子权重")
     safetyRedundancyRatio: Optional[float] = Field(default=None, description="安全冗余比例")
+    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
 
 class SupplierMatchRequest(BaseModel):
     plans: Optional[List[Dict[str, Any]]] = Field(default=None, description="补货计划列表")
+    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
@@ -217,7 +220,8 @@ async def allocation_match_stream(request: AllocationMatchRequest):
             demand_start_date=request.demandStartDate or "",
             demand_end_date=request.demandEndDate or "",
             plan_type=request.planType or "",
-            material_codes=request.materialCodes
+            material_codes=request.materialCodes,
+            analyze_mode=request.analyzeMode
         ):
             yield chunk
     
@@ -247,7 +251,8 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
             inventory_levels=request.inventoryLevels,
             material_codes=request.materialCodes,
             season_factor_weight=request.seasonFactorWeight,
-            safety_redundancy_ratio=request.safetyRedundancyRatio
+            safety_redundancy_ratio=request.safetyRedundancyRatio,
+            analyze_mode=request.analyzeMode
         ):
             yield chunk
     
@@ -272,7 +277,8 @@ async def supplier_match_stream(request: SupplierMatchRequest):
     
     async def response_generator():
         async for chunk in supplier_match_stream_service.stream_analyze(
-            input_plans=request.plans
+            input_plans=request.plans,
+            analyze_mode=request.analyzeMode
         ):
             yield chunk
     
