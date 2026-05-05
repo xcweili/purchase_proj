@@ -207,6 +207,8 @@ class AllocationService:
                 'projectName': row['fd_project_name'],
                 'projectCode': row['fd_project_code'],
                 'unitName': row['fd_unit_name'],
+                'unitFactoryCode': row['fd_unit_factory_code'],
+                'unitPrice': row['fd_unit_price'] or 0,
                 'demandDate': row['fd_requisition_date'],
                 'planType': row['apply_way']
             })
@@ -477,11 +479,19 @@ class AllocationService:
             result['planType'] = plan.get('planType', '')
             result['warehouseCode'] = result.get('warehouseCode', '') or plan.get('warehouseCode', '')
             result['sourceType'] = result.get('sourceType', '') or plan.get('sourceType', '')
-            
+            result['unitFactoryCode'] = plan.get('unitFactoryCode', '')
+
             # 获取库存类型（直接用库存数据里的值，避免歧义）
             selected_warehouse_code = result.get('warehouseCode', '')
             source_type_val = self._get_source_type_from_stocks(filtered_stocks, material_code, selected_warehouse_code)
             result['sourceType'] = source_type_val
+
+            # 判断调拨方式（本仓库/跨仓调拨）
+            plan_warehouse = plan.get('warehouseCode', '')
+            if plan_warehouse and selected_warehouse_code == plan_warehouse:
+                result['allocationType'] = '本仓库'
+            else:
+                result['allocationType'] = '跨仓调拨'
 
             # 获取实际可用库存（必须用实际库存值覆盖 LLM 可能编造的值）
             available_stock = self._get_available_stock(filtered_stocks, material_code,
@@ -518,16 +528,37 @@ class AllocationService:
                     # 重新获取sourceType
                     source_type_val = self._get_source_type_from_stocks(filtered_stocks, material_code, selected_warehouse_code)
                     result['sourceType'] = source_type_val
+
+                    # 重新判断调拨方式（本仓库/跨仓调拨）
+                    plan_warehouse = plan.get('warehouseCode', '')
+                    if plan_warehouse and selected_warehouse_code == plan_warehouse:
+                        result['allocationType'] = '本仓库'
+                    else:
+                        result['allocationType'] = '跨仓调拨'
+
+                    # 重新获取unitFactoryCode
+                    result['unitFactoryCode'] = plan.get('unitFactoryCode', '')
+
+                    # 重新获取unitPrice（从计划中获取）
+                    result['unitPrice'] = plan.get('unitPrice', 0) or 0
             
             # 设置状态名称
             status = result.get('status', 'none')
             result['statusName'] = self._get_status_name(status)
-            
+
+            # 计算调配金额：matched_qty * unit_price（从计划中获取单价）
+            matched_qty = result.get('matchedQty', 0) or 0
+            unit_price = plan.get('unitPrice', 0) or 0
+            result['unitPrice'] = unit_price
+            result['amount'] = matched_qty * unit_price if matched_qty > 0 else 0
+
             self._update_stock_after_match(filtered_stocks, result, material_code)
             logger.info(f"[AllocationService] 计划[{idx}]结果: status={result.get('status')}, "
                         f"matchedQty={result.get('matchedQty')}, "
                         f"sourceWarehouse={result.get('warehouseCode')}, "
-                        f"sourceType={result.get('sourceType')}")
+                        f"sourceType={result.get('sourceType')}, "
+                        f"allocationType={result.get('allocationType')}, "
+                        f"amount={result.get('amount')}")
 
             # 每处理完一个计划就保存一次到数据库
             self._save_allocation_result(plan, result, strategy, source_type, project_unit,
@@ -591,6 +622,24 @@ class AllocationService:
                     return source_type
                 return stock.get('factory_name', '')
         return ''
+
+    def _get_unit_price_from_stocks(self, stocks: List[Dict[str, Any]], material_code: str, warehouse_code: str) -> float:
+        """获取指定物料在指定仓库的单价
+
+        Args:
+            stocks: 库存数据列表
+            material_code: 物料编码
+            warehouse_code: 仓库编码
+
+        Returns:
+            单价，未找到则返回0
+        """
+        for stock in stocks:
+            stock_material = stock.get('material_code') or stock.get('materialCode', '')
+            stock_warehouse = stock.get('loc_code') or stock.get('warehouseCode', '')
+            if stock_material == material_code and stock_warehouse == warehouse_code:
+                return float(stock.get('unit_price', 0) or 0)
+        return 0.0
 
     def _get_status_name(self, status: str) -> str:
         """将状态编码转换为中文名称
@@ -658,6 +707,10 @@ class AllocationService:
             demand_date = plan.get('demandDate', '')
             plan_type_val = plan.get('planType', '') or plan_type
             project_unit_val = plan.get('unitName', '') or project_unit
+            unit_factory_code = result.get('unitFactoryCode', '') or plan.get('unitFactoryCode', '')
+            allocation_type = result.get('allocationType', '跨仓调拨')
+            amount = result.get('amount', 0) or 0
+            unit_price = result.get('unitPrice', 0) or plan.get('unitPrice', 0) or 0
 
             cur.execute('''
                 REPLACE INTO mt_allocation_result (
@@ -668,8 +721,9 @@ class AllocationService:
                     fd_match_status_name, fd_source_type, fd_reason, fd_demand_date,
                     fd_plan_type, fd_strategy,
                     fd_project_unit, fd_demand_time,
-                    fd_create_time
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    fd_create_time, fd_unit_factory_code, fd_allocation_type, fd_amount,
+                    fd_unit_price
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (
                 plan_id, plan_code, material_code, material_desc,
                 tech_spec_id, demand_qty, unit, unit_name,
@@ -678,13 +732,16 @@ class AllocationService:
                 match_status_name, source_type_val, reason, demand_date,
                 plan_type_val, strategy,
                 project_unit_val, demand_date,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                unit_factory_code, allocation_type, amount, unit_price
             ))
 
             conn.commit()
             conn.close()
 
-            logger.info(f"[AllocationService] 保存调配结果: planId={plan_id}, materialCode={material_code}, status={match_status}")
+            logger.info(f"[AllocationService] 保存调配结果: planId={plan_id}, materialCode={material_code}, "
+                        f"status={match_status}, allocationType={allocation_type}, "
+                        f"unitFactoryCode={unit_factory_code}, amount={amount}, unitPrice={unit_price}")
 
         except Exception as e:
             logger.error(f"[AllocationService] 保存调配结果失败: {str(e)}")
