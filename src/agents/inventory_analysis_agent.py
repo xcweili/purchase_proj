@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime, date
 from decimal import Decimal
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 def _convert_for_json(obj):
@@ -47,22 +47,23 @@ def _extract_minimal_outbound(outbound: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _calculate_fallback_analysis(warehouse_code: str, warehouse_name: str, material_code: str, tech_id: str,
-                                 current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]]) -> Dict[str, Any]:
+                                 current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]],
+                                 outbound_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """根据已有数据计算兜底分析结果（当LLM调用失败或解析失败时使用）
 
     计算逻辑:
     1. 从current_stock获取当前库存数量和在途库存数量
     2. 计算实际可用库存 = 当前库存 + 在途库存
-    3. 从historical_outbound计算历史平均月消耗量（用于计算水位线）
-    4. 水位线计算（基于历史数据，与实际库存无关）：
-       - 高位线 = 平均月消耗量 * 1.5
-       - 补库线 = 平均月消耗量
-       - 应急线 = 平均月消耗量 * 0.5
-    5. 判断库存状态（基于实际可用库存）：
-       - 低水位：实际可用库存 <= 补库线
-       - 中水位：实际可用库存 <= 高位线 且 > 补库线
-       - 高水位：实际可用库存 > 高位线
-    6. 计算建议补货数量：purchaseQty = 高位线 - 实际可用库存（如果实际可用库存 < 高位线）
+    3. 使用统计数据计算水位线（优先使用传入的统计数据，否则从历史数据计算）：
+       - 高位线：基于历史最高出库或中位数计算
+       - 补库线：基于中位数计算
+       - 应急线：基于历史最低出库或中位数计算
+    4. 判断库存状态（基于实际可用库存）：
+       - 低水位：实际可用库存 <= 应急线（需要紧急补库）
+       - 较低水位：实际可用库存 <= 补库线（建议补库）
+       - 中水位：实际可用库存 <= 高位线 且 > 补库线（正常）
+       - 高水位：实际可用库存 > 高位线（库存充足）
+    5. 计算建议补货数量：purchaseQty = 高位线 - 实际可用库存（如果实际可用库存 < 高位线）
 
     Args:
         warehouse_code: 仓库编码
@@ -71,6 +72,7 @@ def _calculate_fallback_analysis(warehouse_code: str, warehouse_name: str, mater
         tech_id: 技术规范书ID
         current_stock: 当前库存数据列表（包含 current_stock 和 in_transit_stock 字段）
         historical_outbound: 历史出库数据列表
+        outbound_stats: 历史出库统计数据（包含中位数、同比环比等）
 
     Returns:
         分析结果字典
@@ -87,20 +89,41 @@ def _calculate_fallback_analysis(warehouse_code: str, warehouse_name: str, mater
 
     available_stock = stock_qty + in_transit_qty
 
-    avg_monthly_qty = 0
-    if historical_outbound and len(historical_outbound) > 0:
-        total_qty = 0
-        for item in historical_outbound:
-            qty = item.get('outbound_qty', 0) or 0
-            if isinstance(qty, (int, float)):
-                total_qty += qty
-        avg_monthly_qty = total_qty / len(historical_outbound) if historical_outbound else 0
+    # 优先使用传入的统计数据
+    if outbound_stats:
+        median_qty = float(outbound_stats.get('median_qty', 0)) or 0
+        max_qty = float(outbound_stats.get('max_qty', 0)) or 0
+        min_qty = float(outbound_stats.get('min_qty', 0)) or 0
+        avg_qty = float(outbound_stats.get('avg_qty', 0)) or 0
     else:
-        avg_monthly_qty = 100
+        # 从历史数据计算统计值
+        qty_list = []
+        if historical_outbound and len(historical_outbound) > 0:
+            for item in historical_outbound:
+                qty = item.get('outbound_qty', 0) or 0
+                if isinstance(qty, (int, float)):
+                    qty_list.append(qty)
+        
+        if qty_list:
+            median_qty = statistics.median(qty_list) if len(qty_list) >= 2 else qty_list[0]
+            max_qty = max(qty_list)
+            min_qty = min(qty_list)
+            avg_qty = sum(qty_list) / len(qty_list)
+        else:
+            median_qty = 100
+            max_qty = 150
+            min_qty = 50
+            avg_qty = 100
 
-    high_level = avg_monthly_qty * 1.5
-    replenish_level = avg_monthly_qty
-    emergency_line = avg_monthly_qty * 0.5
+    # 使用中位数和统计数据计算水位线（与LLM分析逻辑一致）
+    # 应急线：仓库存储的最低标准，可以走应急补库的方式去补库了
+    # 补库线：可以开始补库了，库存量可能有一些风险了
+    # 高位线：现在仓库的库存量已经处于高点了，完全不用再补库
+    
+    # 基于中位数计算，更稳健
+    emergency_line = max(min_qty * 1.5, median_qty * 0.3)
+    replenish_level = median_qty
+    high_level = min(max_qty * 1.2, median_qty * 1.8)
 
     if available_stock <= emergency_line:
         stock_status = '低水位'
@@ -169,7 +192,8 @@ class InventoryAnalysisAgent:
             return {"response": response}
 
     def fallback_analyze(self, warehouse_code: str, warehouse_name: str, material_code: str, tech_id: str,
-                       current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                       current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]],
+                       outbound_stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """当LLM调用失败或解析失败时，使用本地计算返回兜底结果
 
         调用时机:
@@ -183,13 +207,14 @@ class InventoryAnalysisAgent:
             tech_id: 技术规范书ID
             current_stock: 当前库存数据列表
             historical_outbound: 历史出库数据列表
+            outbound_stats: 历史出库统计数据（包含中位数、同比环比等）
 
         Returns:
             分析结果列表（包含兜底计算的结果）
         """
         result = _calculate_fallback_analysis(
             warehouse_code, warehouse_name, material_code, tech_id,
-            current_stock, historical_outbound
+            current_stock, historical_outbound, outbound_stats
         )
         return [result]
 

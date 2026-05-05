@@ -4,16 +4,23 @@ import json
 from typing import List, Dict, Any, Optional
 
 from ..services.supplier_match_service import SupplierMatchService
+from ..services.context_manager import ContextManager
 
 
 class SupplierMatchStreamService:
     """供应商匹配服务 - 流式版本（复用SupplierMatchService的数据查询逻辑）"""
 
-    def __init__(self, db, llm_stream_func):
+    def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
+        self.llm_func = llm_func
         self._service = SupplierMatchService.__new__(SupplierMatchService)
         self._service.db = db
+        # 初始化上下文管理器
+        if llm_func:
+            self.context_manager = ContextManager(llm_func, llm_stream_func)
+        else:
+            self.context_manager = None
 
     async def stream_analyze(self, input_plans: List[Dict[str, Any]] = None):
         """流式分析供应商匹配 - 按计划维度遍历，每个计划单独调用LLM分析"""
@@ -88,10 +95,18 @@ class SupplierMatchStreamService:
                     prompt = self._build_single_plan_prompt(plan, suppliers, material_desc, company)
                     system_prompt = "你是一个专业的电力物料采购供应商匹配专家，擅长分析供应商协议数据并给出最优的供应商选择方案。请用清晰的中文进行分析。"
 
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
+                    # 使用上下文管理器处理超长prompt
+                    if self.context_manager and self.context_manager.is_too_long(prompt):
+                        yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                        async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
+                    else:
+                        async for chunk in self.llm_stream_func(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
 
                     status = '有匹配' if suppliers else '无匹配'
                     yield f"\n✅ [处理完成] 供应商匹配状态: {status}\n"

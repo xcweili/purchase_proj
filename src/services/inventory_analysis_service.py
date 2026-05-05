@@ -226,7 +226,8 @@ class InventoryAnalysisService:
                         material_code=material_code,
                         tech_id=tech_id,
                         current_stock=current_stock_data if current_stock_data else [],
-                        historical_outbound=outbound_data if outbound_data else []
+                        historical_outbound=outbound_data if outbound_data else [],
+                        outbound_stats=outbound_stats if outbound_stats else None
                     )
                     if fallback_result and len(fallback_result) > 0:
                         fallback_item = fallback_result[0]

@@ -55,9 +55,9 @@ supplier_match_service = SupplierMatchService(real_db, supplier_match_agent)
 # ============================================
 from .services import AllocationStreamService, InventoryAnalysisStreamService, SupplierMatchStreamService
 
-allocation_stream_service = AllocationStreamService(real_db, llm_service.chat_stream)
-inventory_analysis_stream_service = InventoryAnalysisStreamService(real_db, llm_service.chat_stream)
-supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.chat_stream)
+allocation_stream_service = AllocationStreamService(real_db, llm_service.chat_stream, llm_service.chat)
+inventory_analysis_stream_service = InventoryAnalysisStreamService(real_db, llm_service.chat_stream, llm_service.chat)
+supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.chat_stream, llm_service.chat)
 
 # ============================================
 # 请求模型

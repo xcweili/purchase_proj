@@ -4,16 +4,23 @@ import json
 from typing import List, Dict, Any, Optional
 
 from ..services.allocation_service import AllocationService
+from ..services.context_manager import ContextManager
 
 
 class AllocationStreamService:
     """调配服务 - 流式版本（复用AllocationService的数据查询逻辑）"""
 
-    def __init__(self, db, llm_stream_func):
+    def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
+        self.llm_func = llm_func
         self._service = AllocationService.__new__(AllocationService)
         self._service.db = db
+        # 初始化上下文管理器
+        if llm_func:
+            self.context_manager = ContextManager(llm_func, llm_stream_func)
+        else:
+            self.context_manager = None
 
     async def stream_analyze(self, strategy: str = "time", warehouse_code: str = "",
                             source_type: str = "", project_unit: str = "",
@@ -119,10 +126,18 @@ class AllocationStreamService:
                     prompt = self._build_single_plan_prompt(plan, matching_stocks, strategy, warehouse_code)
                     system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
 
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
+                    # 使用上下文管理器处理超长prompt
+                    if self.context_manager and self.context_manager.is_too_long(prompt):
+                        yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                        async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
+                    else:
+                        async for chunk in self.llm_stream_func(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
 
                     # 判断匹配状态
                     if total_available >= demand_qty:

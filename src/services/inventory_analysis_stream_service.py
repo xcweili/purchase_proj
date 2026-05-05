@@ -6,16 +6,23 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from ..services.inventory_analysis_service import InventoryAnalysisService
+from ..services.context_manager import ContextManager
 
 
 class InventoryAnalysisStreamService:
     """库存分析服务 - 流式版本（复用InventoryAnalysisService的数据查询逻辑）"""
 
-    def __init__(self, db, llm_stream_func):
+    def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
+        self.llm_func = llm_func
         self._service = InventoryAnalysisService.__new__(InventoryAnalysisService)
         self._service.db = db
+        # 初始化上下文管理器
+        if llm_func:
+            self.context_manager = ContextManager(llm_func, llm_stream_func)
+        else:
+            self.context_manager = None
 
     async def stream_analyze(self, start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, material_codes: List[str] = None,
@@ -164,10 +171,18 @@ class InventoryAnalysisStreamService:
                     prompt = self._build_single_combo_prompt(combo_data, start_date, end_date)
                     system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
 
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
+                    # 使用上下文管理器处理超长prompt
+                    if self.context_manager and self.context_manager.is_too_long(prompt):
+                        yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                        async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
+                    else:
+                        async for chunk in self.llm_stream_func(prompt, system_prompt):
+                            content = self._parse_llm_chunk(chunk)
+                            if content:
+                                yield content
 
                     yield "\n✅ [分析完成] 组合分析成功\n"
                     success_count += 1
