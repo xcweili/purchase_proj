@@ -3,6 +3,7 @@
 """调配服务 - 业务逻辑处理层"""
 import copy
 import logging
+from decimal import Decimal
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -287,6 +288,8 @@ class AllocationService:
                 for drow in distance_rows:
                     src_wh = drow.get('fd_source_warehouse_code', '')
                     distance = drow.get('fd_distance', 0) or 0
+                    if isinstance(distance, Decimal):
+                        distance = float(distance)
                     warehouse_distances[src_wh] = distance
                 logger.info(f"[AllocationService] 获取到仓库距离: {warehouse_distances}")
             except Exception as e:

@@ -19,9 +19,10 @@ class AllocationStreamService:
                             source_type: str = "", project_unit: str = "",
                             demand_start_date: str = "", demand_end_date: str = "",
                             plan_type: str = "", material_codes: List[str] = None):
-        """流式分析调配方案 - 完全复用原服务逻辑"""
+        """流式分析调配方案 - 按计划维度遍历，每个计划单独调用LLM分析"""
         try:
-            yield "🔍 [步骤 1/6] 正在查询需求计划数据...\n"
+            # ==================== 步骤1: 查询需求计划数据 ====================
+            yield "🔍 [步骤 1/4] 正在查询需求计划数据...\n"
             plans = await self._service._query_plans(
                 project_unit=project_unit,
                 start_date=demand_start_date,
@@ -35,27 +36,21 @@ class AllocationStreamService:
                 yield "📋 未查询到符合条件的需求计划。\n"
                 return
 
-            yield f"✅ [步骤 1/6] 已获取 {len(plans)} 条需求计划\n\n"
-            yield f"📋 计划预览（前5条）：\n"
-            for i, plan in enumerate(plans[:5], 1):
-                yield f"  {i}. 物料: {plan.get('materialCode', '')}, "
-                yield f"需求: {plan.get('demandQty', 0)}, "
-                yield f"仓库: {plan.get('warehouseCode', '')}\n"
-            if len(plans) > 5:
-                yield f"  ... 还有 {len(plans) - 5} 条计划\n"
-            yield "\n"
+            yield f"✅ [步骤 1/4] 已获取 {len(plans)} 条需求计划\n\n"
 
-            yield "🔍 [步骤 2/6] 正在提取物料编码和技术规范ID...\n"
+            # ==================== 步骤2: 提取物料编码和技术规范ID ====================
+            yield "🔍 [步骤 2/4] 正在提取物料编码和技术规范ID...\n"
             material_codes_list = self._service._extract_material_codes(plans)
             tech_ids_list = self._service._extract_tech_ids(plans)
-            yield f"✅ [步骤 2/6] 提取到 {len(material_codes_list)} 个物料编码\n"
+            yield f"✅ [步骤 2/4] 提取到 {len(material_codes_list)} 个物料编码\n"
             yield f"   物料: {', '.join(material_codes_list[:5])}"
             if len(material_codes_list) > 5:
                 yield f" ... 还有{len(material_codes_list) - 5}个"
             yield "\n"
             yield f"   技术规范ID: {len(tech_ids_list)} 个\n\n"
 
-            yield "🔍 [步骤 3/6] 正在查询库存数据...\n"
+            # ==================== 步骤3: 查询库存数据 ====================
+            yield "🔍 [步骤 3/4] 正在查询库存数据...\n"
             stocks = self._service._query_stocks(
                 material_codes=material_codes_list,
                 source_type=source_type,
@@ -67,95 +62,112 @@ class AllocationStreamService:
                 yield "📦 未查询到符合条件的库存数据。\n"
                 return
 
-            yield f"✅ [步骤 3/6] 已获取 {len(stocks)} 条库存记录\n\n"
-            yield f"📦 库存预览（前5条）：\n"
-            stock_lines = []
-            for i, stock in enumerate(stocks[:5], 1):
-                stock_lines.append(f"  {i}. 仓库: {stock.get('loc_code', '')}, 物料: {stock.get('material_code', '')}, 库存: {stock.get('stock_qty', 0)}")
-            yield "\n".join(stock_lines) + "\n"
-            if len(stocks) > 5:
-                yield f"  ... 还有 {len(stocks) - 5} 条库存记录\n"
-            yield "\n"
+            yield f"✅ [步骤 3/4] 已获取 {len(stocks)} 条库存记录\n\n"
 
-            yield "🔍 [步骤 4/6] 正在构建物料来源类型映射...\n"
+            # ==================== 步骤4: 构建物料来源类型映射 ====================
+            yield "🔍 [步骤 4/4] 正在构建物料来源类型映射...\n"
             material_source_types = self._service._build_material_source_type_map(stocks)
-            yield f"✅ [步骤 4/6] 已构建 {len(material_source_types)} 个物料的来源映射\n\n"
+            yield f"✅ [步骤 4/4] 已构建 {len(material_source_types)} 个物料的来源映射\n\n"
 
-            yield "🔍 [步骤 5/6] 正在处理调配逻辑...\n"
-            processed_plans = []
-            for i, plan in enumerate(plans, 1):
-                material_code = plan.get('materialCode', '')
-                tech_id = plan.get('techSpecId', '')
-                demand_qty = float(plan.get('demandQty', 0) or 0)
+            # ==================== 步骤5: 逐一处理每个计划 ====================
+            total_count = len(plans)
+            full_match_count = 0
+            partial_match_count = 0
+            none_match_count = 0
+
+            for idx, plan in enumerate(plans, 1):
+                plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
+                material_code = plan.get('materialCode') or plan.get('material_code', '')
+                tech_spec_id = plan.get('techSpecId') or ''
+                demand_qty = float(plan.get('demandQty') or plan.get('demand_qty', 0))
                 target_warehouse = plan.get('warehouseCode', '')
+                material_desc = plan.get('materialDesc', '')
 
-                matching_stocks = [s for s in stocks if s.get('material_code') == material_code]
+                # 输出当前处理进度和参数
+                yield "\n📋 [处理 {idx}/{total_count}] 开始处理计划\n".format(idx=idx, total_count=total_count)
+                yield "────────────────────────────────────────\n"
+                yield f"   计划ID: {plan_id}\n"
+                yield f"   物料编码: {material_code}\n"
+                yield f"   物料描述: {material_desc}\n"
+                yield f"   技术规范ID: {tech_spec_id}\n"
+                yield f"   需求数量: {demand_qty}\n"
+                yield f"   目标仓库: {target_warehouse}\n"
+                yield f"   策略: {strategy}\n"
+                yield "────────────────────────────────────────\n"
 
-                if not matching_stocks:
-                    processed_plans.append({
-                        'plan': plan,
-                        'status': 'none',
-                        'matches': [],
-                        'total_available': 0,
-                        'demand': demand_qty
-                    })
-                    continue
+                try:
+                    # 查询当前物料的可用库存
+                    yield "🔍 [子步骤 1/2] 查询物料库存...\n"
+                    matching_stocks = [s for s in stocks if s.get('material_code') == material_code]
+                    
+                    if matching_stocks:
+                        yield f"✅ [子步骤 1/2] 找到 {len(matching_stocks)} 个库存记录\n"
+                        for i, stock in enumerate(matching_stocks[:3], 1):
+                            yield f"   [{i}] 仓库: {stock.get('loc_code', '')}, 库存: {stock.get('stock_qty', 0)}, 类型: {stock.get('source_type', '')}\n"
+                        if len(matching_stocks) > 3:
+                            yield f"   ... 还有 {len(matching_stocks) - 3} 个库存\n"
+                    else:
+                        yield "⚠️ [子步骤 1/2] 未找到匹配的库存\n"
 
-                total_available = sum(float(s.get('stock_qty', 0) or 0) for s in matching_stocks)
-                sorted_stocks = sorted(matching_stocks, key=lambda x: float(x.get('stock_qty', 0) or 0), reverse=True)
+                    total_available = sum(float(s.get('stock_qty', 0) or 0) for s in matching_stocks)
+                    yield f"   总可用库存: {total_available}\n"
 
-                matches = []
-                remaining_qty = demand_qty
-                for stock in sorted_stocks:
-                    if remaining_qty <= 0:
-                        break
-                    allocate_qty = min(remaining_qty, float(stock.get('stock_qty', 0) or 0))
-                    matches.append({
-                        'source_warehouse': stock.get('loc_code', ''),
-                        'source_warehouse_name': stock.get('loc_name', ''),
-                        'allocate_qty': allocate_qty,
-                        'stock_qty': float(stock.get('stock_qty', 0) or 0),
-                        'distance': stock.get('distance', ''),
-                        'source_type': stock.get('source_type', '')
-                    })
-                    remaining_qty -= allocate_qty
+                    # 调用LLM进行调配分析
+                    yield "\n🤖 开始AI智能分析...\n"
+                    yield "────────────────────────────────────────\n"
+                    
+                    prompt = self._build_single_plan_prompt(plan, matching_stocks, strategy, warehouse_code)
+                    system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
 
-                status = 'full' if remaining_qty <= 0 else 'partial' if matches else 'none'
-                processed_plans.append({
-                    'plan': plan,
-                    'status': status,
-                    'matches': matches,
-                    'total_available': total_available,
-                    'demand': demand_qty
-                })
+                    async for chunk in self.llm_stream_func(prompt, system_prompt):
+                        content = self._parse_llm_chunk(chunk)
+                        if content:
+                            yield content
 
-                if i <= 3:
-                    yield f"   处理进度: {i}/{len(plans)}\n"
+                    # 判断匹配状态
+                    if total_available >= demand_qty:
+                        status = 'full'
+                        full_match_count += 1
+                    elif total_available > 0:
+                        status = 'partial'
+                        partial_match_count += 1
+                    else:
+                        status = 'none'
+                        none_match_count += 1
 
-            full_match = sum(1 for p in processed_plans if p['status'] == 'full')
-            partial_match = sum(1 for p in processed_plans if p['status'] == 'partial')
-            none_match = sum(1 for p in processed_plans if p['status'] == 'none')
+                    yield f"\n✅ [处理完成] 匹配状态: {'完全匹配' if status == 'full' else '部分匹配' if status == 'partial' else '无匹配'}\n"
 
-            yield f"✅ [步骤 5/6] 处理完成\n"
-            yield f"📊   完全匹配: {full_match}, 部分匹配: {partial_match}, 无匹配: {none_match}\n\n"
+                except Exception as e:
+                    yield f"\n❌ [处理失败] {str(e)}\n"
+                    none_match_count += 1
 
-            yield "🔍 [步骤 6/6] 正在构建AI分析数据...\n"
-            yield f"✅ [步骤 6/6] 数据准备完成，开始AI分析\n\n"
+                yield "\n────────────────────────────────────────\n\n"
 
-            yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            yield "🤖 开始AI智能分析...\n"
-            yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            prompt = self._build_stream_prompt(processed_plans, strategy, warehouse_code)
-            system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
-
-            async for chunk in self.llm_stream_func(prompt, system_prompt):
-                content = self._parse_llm_chunk(chunk)
-                if content:
-                    yield content
+            # 输出最终汇总
+            yield "\n📊 调配分析汇总报告\n"
+            yield "────────────────────────────────────────\n"
+            yield f"   总计划数: {total_count}\n"
+            yield f"   完全匹配: {full_match_count}\n"
+            yield f"   部分匹配: {partial_match_count}\n"
+            yield f"   无匹配: {none_match_count}\n"
+            
+            # 生成建议
+            suggestion = ""
+            if full_match_count == total_count:
+                suggestion = f"{total_count}项完全匹配可直接审核"
+            elif full_match_count + partial_match_count > 0:
+                suggestion = f"{full_match_count}项完全匹配可直接审核，{partial_match_count}项部分匹配建议跨仓调拨或协议补库"
+            else:
+                suggestion = "所有物料无库存，建议触发协议补库流程"
+            
+            if none_match_count > 0 and full_match_count + partial_match_count > 0:
+                suggestion += f"，{none_match_count}项建议走应急采购"
+            
+            yield f"   建议: {suggestion}\n"
+            yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
         except Exception as e:
-            yield f"❌ 分析失败: {str(e)}\n"
+            yield f"❌ 整体分析失败: {str(e)}\n"
             import traceback
             yield f"详细信息: {traceback.format_exc()}\n"
 
@@ -174,96 +186,75 @@ class AllocationStreamService:
                 elif content:
                     return content
         except json.JSONDecodeError:
-            # 如果不是JSON格式，直接返回原始内容
             return chunk.strip()
         return None
 
-    def _build_stream_prompt(self, processed_plans: List[Dict[str, Any]], strategy: str, target_warehouse: str) -> str:
-        """构建流式接口的prompt"""
-
-        plans_formatted = []
-        for p in processed_plans:
-            plan = p.get('plan', {})
-            plans_formatted.append({
-                "计划ID": plan.get('planId', ''),
-                "物料编码": plan.get('materialCode', ''),
-                "物料描述": plan.get('materialDesc', ''),
-                "需求数量": float(p.get('demand', 0) or 0),
-                "目标仓库": plan.get('warehouseCode', ''),
-                "技术规范ID": plan.get('techSpecId', ''),
-                "匹配状态": p.get('status', ''),
-                "总可用库存": float(p.get('total_available', 0) or 0),
-                "调配方案": [{
-                    'source_warehouse': m.get('source_warehouse', ''),
-                    'source_warehouse_name': m.get('source_warehouse_name', ''),
-                    'allocate_qty': float(m.get('allocate_qty', 0) or 0),
-                    'stock_qty': float(m.get('stock_qty', 0) or 0),
-                    'distance': str(m.get('distance', '')),
-                    'source_type': m.get('source_type', '')
-                } for m in p.get('matches', [])]
+    def _build_single_plan_prompt(self, plan: Dict[str, Any], stocks: List[Dict[str, Any]], strategy: str, target_warehouse: str) -> str:
+        """为单个计划构建调配分析prompt"""
+        plan_id = plan.get('planId') or plan.get('plan_id', '')
+        material_code = plan.get('materialCode') or plan.get('material_code', '')
+        material_desc = plan.get('materialDesc', '')
+        demand_qty = float(plan.get('demandQty') or plan.get('demand_qty', 0))
+        tech_spec_id = plan.get('techSpecId') or ''
+        plan_warehouse_code = plan.get('warehouseCode', '')
+        
+        stocks_formatted = []
+        for s in stocks:
+            stocks_formatted.append({
+                '仓库编码': s.get('loc_code', ''),
+                '仓库名称': s.get('loc_name', ''),
+                '库存数量': float(s.get('stock_qty', 0) or 0),
+                '库存类型': s.get('source_type', ''),
+                '距离': s.get('distance', '')
             })
 
-        prompt = f"""你是一个专业的电力物资调配专家。我将提供需求计划和库存数据，请你分析并给出最优的调配方案。
+        prompt = f"""你是一个专业的电力物资调配专家。请根据以下计划信息和库存数据，进行智能调配分析。
 
 ## 任务说明
-请分析以下需求计划，根据库存分布情况，为每个需求计划制定最优的物资调配方案，并详细说明你的分析过程和理由。
+分析单个需求计划的库存匹配情况，给出最优调配方案和建议。
 
-## 输入数据
+## 当前计划信息
+- 计划ID: {plan_id}
+- 物料编码: {material_code}
+- 物料描述: {material_desc}
+- 技术规范ID: {tech_spec_id}
+- 需求数量: {demand_qty}
+- 目标仓库: {plan_warehouse_code}
+- 调配策略: {strategy}
 
-### 需求计划列表
-{json.dumps(plans_formatted[:30], ensure_ascii=False, indent=2)}
-
-### 调配策略
-当前策略: {strategy}
-
-策略说明:
-- time: 时效优先策略，优先选择距离近的仓库
-- cost: 成本优先策略，优先选择库存充足的仓库
-- stock: 库存均衡策略，尽量平衡各仓库库存
-- emerg: 紧急优先策略，优先满足紧急需求
-
-### 目标仓库
-{target_warehouse if target_warehouse else '未指定'}
+## 可用库存数据
+{json.dumps(stocks_formatted, ensure_ascii=False, indent=2)}
 
 ## 分析要求
 
 **输出格式要求：**
-- 请使用标准Markdown格式输出
-- 标题使用 #、##、### 格式
-- 列表使用 - 或数字开头
-- 表格使用 | 分隔符
-- 重要内容使用 **粗体**
+- 使用Markdown格式输出
+- 使用##、### 标题
+- 列表使用 - 开头
+- 表格使用 | 分隔
 
 **输出结构：**
 
-# 电力物资调配分析报告
+## 调配分析结果
 
-## 一、需求概览
-简要描述本次需要调配的物料种类和总体需求
+### 一、需求概况
+- 计划ID、物料编码、需求数量等基本信息
 
-## 二、库存分析
-- 各仓库的库存分布情况
-- 库存充足程度分析
-- 是否存在缺货风险
+### 二、库存匹配分析
+- 可用库存总量
+- 各仓库库存分布
+- 是否满足需求
 
-## 三、调配方案
+### 三、最优调配方案
+| 来源仓库 | 仓库名称 | 调拨数量 | 库存类型 |
+|---------|---------|---------|---------|
+| 示例 | 示例仓库 | 100 | 自有库存 |
 
-### 方案详情
-| 来源仓库 | 仓库名称 | 调配数量 | 仓库库存 | 距离（公里） | 来源类型 |
-|---------|---------|---------|---------|-------------|---------|
-| 示例数据 | 示例仓库 | 10 | 100 | 25 | 周转库 |
+### 四、分析结论与建议
+- 当前库存是否满足需求
+- 匹配状态（完全匹配/部分匹配/无匹配）
+- 后续处理建议
 
-### 选择理由
-基于「时效优先」策略（当前策略为time），核心目标是最快速度满足需求。
-
-## 四、优化建议
-- 如何提高调配效率
-- 如何减少调配成本
-- 如何平衡库存
-
-## 五、结果汇总
-总结本次调配的总体情况
-
-请用自然、清晰的语言进行分析，让用户能够理解你的决策过程。
+请用简洁、清晰的语言进行分析。
 """
         return prompt

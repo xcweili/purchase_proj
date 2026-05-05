@@ -165,8 +165,11 @@ class InventoryAnalysisService:
                 all_results.append(self._build_empty_result(warehouse_code, warehouse_name, material_code, tech_id, inventory_level, start_date, end_date))
                 continue
 
+            # 计算历史出库统计数据
+            outbound_stats = self._calculate_outbound_stats(outbound_data, start_date, end_date)
+
             # 步骤4.3: 调用LLM智能体进行分析
-            # 输入数据: 当前库存(current_stock_data) + 历史出库(outbound_data)
+            # 输入数据: 当前库存(current_stock_data) + 历史出库(outbound_data) + 统计数据(outbound_stats)
             result = await self.agent.analyze(
                 warehouse_code=warehouse_code,
                 warehouse_name=warehouse_name,
@@ -182,6 +185,7 @@ class InventoryAnalysisService:
                     "in_transit_stock": 0
                 }],
                 data2=outbound_data,
+                data3=outbound_stats,
                 stream=stream
             )
 
@@ -1000,6 +1004,102 @@ class InventoryAnalysisService:
             logger.error(f"[InventoryAnalysisService] 获取历史出库数据失败: {str(e)}")
 
         return outbound_data
+
+    def _calculate_outbound_stats(self, outbound_data: List[Dict[str, Any]], start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """计算历史出库数据的统计指标
+
+        Args:
+            outbound_data: 历史出库数据列表
+            start_date: 开始日期（格式YYYYMM）
+            end_date: 结束日期（格式YYYYMM）
+
+        Returns:
+            统计指标字典
+        """
+        stats = {
+            'max_outbound': 0,
+            'min_outbound': 0,
+            'avg_outbound': 0,
+            'median_outbound': 0,
+            'std_dev': None,
+            'yoy_change': None,
+            'mom_change': None,
+            'seasonality': None,
+            'total_records': len(outbound_data)
+        }
+
+        if not outbound_data:
+            return stats
+
+        outbound_list = []
+        month_map = {}
+        for ob in outbound_data:
+            qty = float(ob.get('outbound_qty', 0) or 0)
+            month = str(ob.get('posting_month', ob.get('month', '')))
+            outbound_list.append(qty)
+            month_map[month] = qty
+
+        if not outbound_list:
+            return stats
+
+        stats['max_outbound'] = max(outbound_list)
+        stats['min_outbound'] = min(outbound_list)
+        stats['avg_outbound'] = sum(outbound_list) / len(outbound_list)
+
+        sorted_list = sorted(outbound_list)
+        n = len(sorted_list)
+        if n % 2 == 0:
+            stats['median_outbound'] = (sorted_list[n//2-1] + sorted_list[n//2]) / 2
+        else:
+            stats['median_outbound'] = sorted_list[n//2]
+
+        if len(outbound_list) > 1:
+            mean = stats['avg_outbound']
+            variance = sum((x - mean) ** 2 for x in outbound_list) / len(outbound_list)
+            stats['std_dev'] = variance ** 0.5
+
+        start_year = None
+        end_year = None
+        if start_date and len(start_date) == 6:
+            start_year = int(start_date[:4])
+        if end_date and len(end_date) == 6:
+            end_year = int(end_date[:4])
+
+        if start_year and end_year and end_year > start_year:
+            sorted_months = sorted(month_map.keys(), reverse=True)
+            if len(sorted_months) >= 12:
+                recent_6m = [month_map[m] for m in sorted_months[:6] if m in month_map]
+                recent_avg = sum(recent_6m) / len(recent_6m) if recent_6m else 0
+
+                last_year_months = [m for m in sorted_months if m.startswith(str(end_year - 1))]
+                last_year_6m = [month_map[m] for m in last_year_months[:6] if m in month_map]
+                last_year_avg = sum(last_year_6m) / len(last_year_6m) if last_year_6m else 0
+
+                if last_year_avg > 0:
+                    stats['yoy_change'] = ((recent_avg - last_year_avg) / last_year_avg) * 100
+
+        sorted_months = sorted(month_map.keys(), reverse=True)
+        if len(sorted_months) >= 2:
+            current_month = sorted_months[0]
+            prev_month = sorted_months[1]
+            current_qty = month_map.get(current_month, 0)
+            prev_qty = month_map.get(prev_month, 0)
+            if prev_qty > 0:
+                stats['mom_change'] = ((current_qty - prev_qty) / prev_qty) * 100
+
+        if len(outbound_list) >= 6:
+            mean = stats['avg_outbound']
+            std = stats.get('std_dev')
+            if std and mean > 0:
+                cv = std / mean
+                if cv > 0.5:
+                    stats['seasonality'] = "波动较大，存在季节性特征"
+                elif cv > 0.25:
+                    stats['seasonality'] = "波动适中"
+                else:
+                    stats['seasonality'] = "波动较小，消耗稳定"
+
+        return stats
 
     async def _get_warehouse_info_by_levels(self, inventory_levels: Optional[List[str]] = None) -> Dict[str, Dict[str, str]]:
         """根据库存层级获取仓库信息"""

@@ -149,14 +149,17 @@ class InventoryAnalysisAgent:
     async def analyze(self, warehouse_code: str = "", warehouse_name: str = "",
                      material_code: str = "", tech_id: str = "",
                      data1: List[Dict[str, Any]] = None, data2: List[Dict[str, Any]] = None,
+                     data3: Dict[str, Any] = None,
                      stream: bool = False) -> Dict[str, Any]:
         """执行库存分析"""
         if not data1:
             data1 = []
         if not data2:
             data2 = []
+        if not data3:
+            data3 = {}
 
-        prompt = self._build_prompt(warehouse_code, warehouse_name, material_code, tech_id, data1, data2)
+        prompt = self._build_prompt(warehouse_code, warehouse_name, material_code, tech_id, data1, data2, data3)
 
         if stream:
             response_generator = self.llm_stream_func(prompt)
@@ -191,18 +194,21 @@ class InventoryAnalysisAgent:
         return [result]
 
     def _build_prompt(self, warehouse_code: str, warehouse_name: str, material_code: str, tech_id: str,
-                     current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]]) -> str:
+                     current_stock: List[Dict[str, Any]], historical_outbound: List[Dict[str, Any]],
+                     outbound_stats: Dict[str, Any] = None) -> str:
         """构建库存分析prompt"""
+        if outbound_stats is None:
+            outbound_stats = {}
+
         minimal_stock = [_extract_minimal_stock(s) for s in current_stock]
         minimal_outbound = [_extract_minimal_outbound(o) for o in historical_outbound]
 
         stock_text = json.dumps(minimal_stock, ensure_ascii=False, indent=2, default=_convert_for_json)
         outbound_text = json.dumps(minimal_outbound, ensure_ascii=False, indent=2, default=_convert_for_json)
 
-        prompt = f"""你是一个专业的采购管理分析助手，你的任务是根据历史采购数据、目前库存，进行库存分析与预警，流程大概是：
-1. 查看有哪些仓库+物料+技术规范书id的组合，它们的历史数据跟目前存储数据分别是多少；
-2. 遍历每一个分析对象，根据影响因子，对已有数据进行分析；
-3. 得出每个对象的三级水位库存，是否要补货，要补多少货这些信息，按照约定的输出格式，输出一个json对象，注意每一个字段的值不要错
+        stats_text = self._format_stats_text(outbound_stats)
+
+        prompt = f"""你是一个专业的采购管理分析助手，你的任务是根据历史采购数据、目前库存，进行库存分析与预警。
 
 ## 基础信息
 1、仓库编码：{warehouse_code}
@@ -211,8 +217,9 @@ class InventoryAnalysisAgent:
 4、技术规范书ID：{tech_id}
 5、当前库存数据（currentStock）：{stock_text}
 6、历史出库数据（historicalOutbound）：{outbound_text}
-7、补货频率：周
-8、供货周期：15-45天
+
+## 历史出库数据统计（重要！）
+{stats_text}
 
 ## 关键概念说明
 【实际可用库存】= 当前库存(current_stock) + 在途库存(in_transit_stock)
@@ -224,22 +231,49 @@ class InventoryAnalysisAgent:
 补库线：目前仓库还有一些库存，但是需要补货了，应该按历史相关的出库量数据推测（基于历史数据计算）
 应急线：目前仓库的库存量严重不足，并且时间上来看，已经等不到补货的供货周期（15-45天）了（基于历史数据计算）
 
-## 分析要求
-1. 只分析一组数据：仓库+物料+tech_id，不要分析多个
-2. 先分析历史出库数据（historicalOutbound）的趋势：
-   - 计算历史平均月消耗量
-   - 分析同比、环比情况（与上月、去年同期对比）
-   - 判断是否有季节性波动特征
-3. 基于以下因素综合设定高位线、补库线、应急线（不要考虑in_transit_stock）：
-   - 物料种类（例如：常用物料、核心物料、备品备件、季节性物料等）
-   - 历史消耗量的稳定性
-   - 供货周期（15-45天）
-   - 季节性因素（是否为季节消耗大的物料）
-   - 同比环比增长/下降趋势
-   - 历史最大/最小消耗量
-4. 判断库存状态时，使用【实际可用库存】= current_stock + in_transit_stock
-5. 判断库存状态（不足/正常/充足）：比较实际可用库存与水位线
-6. 计算补货数量时，使用公式：补货数量 = 高位线 - 实际可用库存（如果实际可用库存 < 高位线）
+## 分析参数说明
+
+### 1. 正态分布分析
+- **中位数（median_outbound）**：是分布的中心点，50%的数据在此值以下
+- 如果 **实际可用库存 > 中位数**，说明库存相对充足
+- 如果 **实际可用库存 < 中位数**，说明库存相对紧张
+- **标准差（std_dev）**：反映数据离散程度，标准差大说明消耗不稳定
+
+### 2. 同比分析（yoy_change）
+- **同比 > 0**：最近消耗相比去年同期增长，可能需要增加库存
+- **同比 < 0**：最近消耗相比去年同期下降，可以适当减少库存
+- **同比 = 0或N/A**：消耗相对稳定
+
+### 3. 环比分析（mom_change）
+- **环比 > 0**：本月消耗相比上月增长
+- **环比 < 0**：本月消耗相比上月下降
+
+### 4. 季节性判断
+- **波动较大**：存在明显的季节性，需要考虑季节因素设置水位线
+- **波动适中**：有一定的变化，但不是季节性的
+- **波动较小**：消耗相对稳定
+
+## 水位线分析方法
+
+### 水位线制定原则：
+请根据历史出库数据统计，综合考虑以下因素，自主分析判断合适的水位线值：
+- 历史消耗量趋势（最高、最低、平均、中位数）
+- 数据离散程度（标准差）和消耗稳定性
+- 同比环比变化趋势
+- 季节性特征
+- 供货周期（15-45天）
+- 物料重要程度和使用场景
+
+### 水位线定义：
+- **应急线**：仓库存储的最低标准，低于此线必须走应急补库流程，不能再低了
+- **补库线**：可以开始补库了，库存量可能有一定风险
+- **高位线**：仓库库存已处于高点，完全不用再补库，可以考虑利库
+
+### 水位判断标准：
+- **紧急状态**: 实际可用库存 <= 应急线 → **立即紧急补货**
+- **低水位**: 实际可用库存 > 应急线 且 <= 补库线 → **立即补库**
+- **中水位**: 实际可用库存 > 补库线 且 <= 高位线 → **建议补库**
+- **高水位**: 实际可用库存 > 高位线 → **正常**，无需补库
 
 ## 输出格式
 严格遵循以下json格式输出，不要带任何其他信息：
@@ -259,22 +293,39 @@ class InventoryAnalysisAgent:
     "materialDesc": "物料描述"
 }}
 ```
-
-说明：
-- warehouseName: 仓库名称
-- materialCode: 物料编码
-- techId: 技术规范书ID
-- purchaseQty: 需要采购的数量，基于【实际可用库存】计算得出
-- highLevel: 高位线（综合历史数据、季节性、同比环比等因素制定，不是简单公式）
-- replenishLevel: 补库线（综合历史数据、季节性、同比环比等因素制定，不是简单公式）
-- currentStock: 当前库存数量（不含在途）
-- inTransitStock: 在途库存数量
-- availableStock: 实际可用库存 = currentStock + inTransitStock
-- emergencyLine: 应急线（综合历史数据、季节性、同比环比等因素制定，不是简单公式）
-- unit: 计量单位
-- materialDesc: 物料描述
 """
         return prompt
+
+    def _format_stats_text(self, stats: Dict[str, Any]) -> str:
+        """格式化统计数据为文本"""
+        if not stats:
+            return "无统计数据"
+
+        lines = []
+        lines.append("| 指标 | 数值 | 说明 |")
+        lines.append("|------|------|------|")
+        lines.append(f"| 历史最高月出库 | {stats.get('max_outbound', 0):.0f} | 历史单月最大出库量 |")
+        lines.append(f"| 历史最低月出库 | {stats.get('min_outbound', 0):.0f} | 历史单月最小出库量 |")
+        lines.append(f"| 平均月出库 | {stats.get('avg_outbound', 0):.2f} | 所有月份的平均值 |")
+        lines.append(f"| 中位数出库 | {stats.get('median_outbound', 0):.2f} | 50%的月份出库量低于此值 |")
+
+        std_dev = stats.get('std_dev')
+        std_dev_text = "N/A" if not std_dev else f"{std_dev:.2f}"
+        lines.append(f"| 标准差 | {std_dev_text} | 出库量的离散程度 |")
+
+        yoy = stats.get('yoy_change')
+        yoy_text = "N/A" if yoy is None else f"{yoy:+.1f}%"
+        lines.append(f"| 同比变化 | {yoy_text} | 去年同期对比 |")
+
+        mom = stats.get('mom_change')
+        mom_text = "N/A" if mom is None else f"{mom:+.1f}%"
+        lines.append(f"| 环比变化 | {mom_text} | 上月对比 |")
+
+        seasonality = stats.get('seasonality', '数据不足')
+        lines.append(f"| 季节性特征 | {seasonality} | 出库波动特征 |")
+        lines.append(f"| 数据记录数 | {stats.get('total_records', 0)} | 历史出库记录条数 |")
+
+        return "\n".join(lines)
 
     def parse_analysis_response(self, response: str) -> List[Dict[str, Any]]:
         """解析模型返回的分析结果"""
