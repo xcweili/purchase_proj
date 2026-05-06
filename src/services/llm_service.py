@@ -31,7 +31,7 @@ ENTERPRISE_AGENT_CONFIG = {
     # 智能体配置
     'agent': {
         'agent_code': 'f3364f40-f033-4169-80b5-068de7d4c689',
-        'agent_version': '1777687212483',
+        'agent_version': '1778036275289',
     },
     
     # 请求配置
