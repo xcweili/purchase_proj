@@ -204,6 +204,7 @@ class AllocationService:
                 'demandQty': row['fd_requisition_num'] or 0,
                 'warehouseCode': row['fd_warehouse_code'],
                 'unit': row['fd_unit'],
+                'unitCode': row['fd_unit_code'],
                 'projectName': row['fd_project_name'],
                 'projectCode': row['fd_project_code'],
                 'unitName': row['fd_unit_name'],
@@ -472,6 +473,7 @@ class AllocationService:
             result['techSpecId'] = plan.get('techSpecId', '')
             result['materialDesc'] = plan.get('materialDesc', '')
             result['unit'] = plan.get('unit', '')
+            result['unitCode'] = plan.get('unitCode', '')
             result['unitName'] = plan.get('unitName', '')
             result['projectName'] = plan.get('projectName', '')
             result['planCode'] = plan.get('planCode', '')
@@ -707,6 +709,7 @@ class AllocationService:
             demand_date = plan.get('demandDate', '')
             plan_type_val = plan.get('planType', '') or plan_type
             project_unit_val = plan.get('unitName', '') or project_unit
+            unit_code = result.get('unitCode', '') or plan.get('unitCode', '')
             unit_factory_code = result.get('unitFactoryCode', '') or plan.get('unitFactoryCode', '')
             allocation_type = result.get('allocationType', '跨仓调拨')
             amount = result.get('amount', 0) or 0
@@ -715,7 +718,7 @@ class AllocationService:
             cur.execute('''
                 REPLACE INTO mt_allocation_result (
                     fd_plan_id, fd_plan_code, fd_material_code, fd_material_desc,
-                    fd_tech_spec_id, fd_demand_qty, fd_unit, fd_unit_name,
+                    fd_tech_spec_id, fd_demand_qty, fd_unit, fd_unit_code, fd_unit_name,
                     fd_project_name, fd_project_code, fd_warehouse_code, fd_warehouse_name,
                     fd_matched_qty, fd_available_stock, fd_score, fd_match_status,
                     fd_match_status_name, fd_source_type, fd_reason, fd_demand_date,
@@ -723,10 +726,10 @@ class AllocationService:
                     fd_project_unit, fd_demand_time,
                     fd_create_time, fd_unit_factory_code, fd_allocation_type, fd_amount,
                     fd_unit_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (
                 plan_id, plan_code, material_code, material_desc,
-                tech_spec_id, demand_qty, unit, unit_name,
+                tech_spec_id, demand_qty, unit, unit_code, unit_name,
                 project_name, project_code, warehouse_code, warehouse_name,
                 matched_qty, available_stock, score, match_status,
                 match_status_name, source_type_val, reason, demand_date,
