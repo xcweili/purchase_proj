@@ -158,7 +158,7 @@ class AllocationStreamService:
             partial_match_count = sum(1 for p in all_plan_data if 0 < p['total_available'] < p['demand_qty'])
             none_match_count = sum(1 for p in all_plan_data if p['total_available'] == 0)
 
-            yield "\n📊 调配分析汇总报告\n"
+            yield "\n\n📊 调配分析汇总报告\n"
             yield "────────────────────────────────────────\n"
             yield f"   总计划数: {len(all_plan_data)}\n"
             yield f"   完全匹配: {full_match_count}\n"
@@ -177,7 +177,7 @@ class AllocationStreamService:
                 suggestion += f"，{none_match_count}项建议走应急采购"
 
             yield f"   建议: {suggestion}\n"
-            yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            yield "────────────────────────────────────────\n"
 
         except Exception as e:
             yield f"❌ 批量分析失败: {str(e)}\n"
@@ -263,7 +263,7 @@ class AllocationStreamService:
 
             yield "\n────────────────────────────────────────\n\n"
 
-        yield "\n📊 调配分析汇总报告\n"
+        yield "\n\n📊 调配分析汇总报告\n"
         yield "────────────────────────────────────────\n"
         yield f"   总计划数: {total_count}\n"
         yield f"   完全匹配: {full_match_count}\n"
@@ -282,7 +282,7 @@ class AllocationStreamService:
             suggestion += f"，{none_match_count}项建议走应急采购"
 
         yield f"   建议: {suggestion}\n"
-        yield "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        yield "────────────────────────────────────────\n"
 
     def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
