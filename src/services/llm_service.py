@@ -25,7 +25,7 @@ ENTERPRISE_AGENT_CONFIG = {
     
     # 认证信息
     'auth': {
-        'app_key': 'Bearer YOUR_APP_KEY',  # 需要替换为实际的APP_KEY
+        'app_key': 'Bearer 9kXue4l98cCRrWGCuN99vgLrkBQAPfQW',  # 需要替换为实际的APP_KEY
     },
     
     # 智能体配置

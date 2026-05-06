@@ -19,13 +19,13 @@ SQLITE_DB_PATH = 'purchase_management.db'
 # 如需切换到MySQL，注释掉SQLite相关代码，取消注释MySQL相关代码，并安装pymysql: pip install pymysql
 # ============================================
 
-# MySQL配置 (待启用)
+# MySQL配置
 MYSQL_CONFIG = {
-    'host': '192.168.1.1',
-    'port': 3306,
-    'user': 'root',
-    'password': 'HN@123456',
-    'database': 'ai',
+    'host': '25.212.252.199',
+    'port': 13306,
+    'user': 'wztppt230',
+    'password': 'HNxt@2025',
+    'database': 'ai_project',
     'charset': 'utf8mb4',
     'cursorclass': 'DictCursor'
 }
