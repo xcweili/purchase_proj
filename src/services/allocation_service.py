@@ -62,81 +62,71 @@ class AllocationService:
         logger.info(f"[AllocationService] planType: {plan_type}")
         logger.info(f"[AllocationService] materialCodes: {material_codes}")
 
-        # ==================== 步骤1: 确定要执行的策略 ====================
-        # 如果strategy为空，默认执行所有四种策略
-        strategies_to_run = []
-        if strategy and strategy.strip():
-            strategies_to_run.append(strategy.strip())
-        else:
-            strategies_to_run = self.STRATEGIES
+        try:
+            strategies_to_run = []
+            if strategy and strategy.strip():
+                strategies_to_run.append(strategy.strip())
+            else:
+                strategies_to_run = self.STRATEGIES
 
-        logger.info(f"[AllocationService] 将执行策略: {strategies_to_run}")
+            logger.info(f"[AllocationService] 将执行策略: {strategies_to_run}")
 
-        # 存储所有策略的执行结果
-        all_strategy_results = {}
+            all_strategy_results = {}
 
-        # ==================== 步骤2: 遍历执行每种策略 ====================
-        for strat in strategies_to_run:
-            logger.info(f"[AllocationService] 开始执行策略: {strat}")
+            for strat in strategies_to_run:
+                logger.info(f"[AllocationService] 开始执行策略: {strat}")
 
-            # 步骤2.1: 查询库存使用计划
-            # 数据来源: mt_stock_use_list_plan_two
-            # 强制筛选 apply_way IN ('01', '05', '06')
-            plans = await self._query_plans(project_unit, demand_start_date, demand_end_date, plan_type, warehouse_code, material_codes)
-            logger.info(f"[AllocationService] [策略{strat}] 从DB查询到plans数量: {len(plans)}")
+                plans = await self._query_plans(project_unit, demand_start_date, demand_end_date, plan_type, warehouse_code, material_codes)
+                logger.info(f"[AllocationService] [策略{strat}] 从DB查询到plans数量: {len(plans)}")
 
-            # 如果没有计划，生成空结果
-            if not plans:
-                all_strategy_results[strat] = self._empty_result("没有可处理的计划")
-                continue
+                if not plans:
+                    all_strategy_results[strat] = self._empty_result("没有可处理的计划")
+                    continue
 
-            # 步骤2.2: 从计划中提取物料编码和技术规范书ID，用于查询库存
-            material_codes_list = self._extract_material_codes(plans)
-            tech_ids_list = self._extract_tech_ids(plans)
-            
-            # 步骤2.3: 查询库存数据（同时查询到目标仓库的距离）
-            # 数据来源: w_stock_info_0808, mt_warehouse_distance
-            # 按物料编码+技术规范书ID过滤，确保库存与需求匹配
-            stocks = self._query_stocks(material_codes_list, source_type, warehouse_code, tech_ids_list)
-            logger.info(f"[AllocationService] [策略{strat}] 从DB查询到stocks数量: {len(stocks)}")
+                material_codes_list = self._extract_material_codes(plans)
+                tech_ids_list = self._extract_tech_ids(plans)
+                
+                stocks = self._query_stocks(material_codes_list, source_type, warehouse_code, tech_ids_list)
+                logger.info(f"[AllocationService] [策略{strat}] 从DB查询到stocks数量: {len(stocks)}")
 
-            # 步骤2.4: 构建物料到库存类型的映射
-            material_source_types = self._build_material_source_type_map(stocks)
+                material_source_types = self._build_material_source_type_map(stocks)
 
-            # 步骤2.5: 处理所有计划，调用LLM智能体进行调配匹配
-            # 返回结果和统计信息
-            results, stats = await self._process_plans(plans, stocks, material_source_types, strat, warehouse_code,
-                                                      source_type, project_unit, demand_start_date, demand_end_date, plan_type)
+                results, stats = await self._process_plans(plans, stocks, material_source_types, strat, warehouse_code,
+                                                          source_type, project_unit, demand_start_date, demand_end_date, plan_type)
 
-            # 步骤2.6: 生成建议文本
-            suggestion = self._generate_suggestion(stats, len(results))
+                suggestion = self._generate_suggestion(stats, len(results))
 
-            logger.info(f"[AllocationService] [策略{strat}] 完成: total={stats['total']}, full={stats['fullMatchCount']}, "
-                        f"partial={stats['partialMatchCount']}, none={stats['noneMatchCount']}")
+                logger.info(f"[AllocationService] [策略{strat}] 完成: total={stats['total']}, full={stats['fullMatchCount']}, "
+                            f"partial={stats['partialMatchCount']}, none={stats['noneMatchCount']}")
 
-            # 步骤2.7: 组装策略结果
-            all_strategy_results[strat] = {
+                all_strategy_results[strat] = {
+                    "code": 200,
+                    "message": "success",
+                    "data": {
+                        "total": stats['total'],
+                        "fullMatchCount": stats['fullMatchCount'],
+                        "partialMatchCount": stats['partialMatchCount'],
+                        "noneMatchCount": stats['noneMatchCount'],
+                        "avgScore": stats['avgScore'],
+                        "suggestion": suggestion,
+                        "results": results
+                    }
+                }
+
+            return {
                 "code": 200,
                 "message": "success",
                 "data": {
-                    "total": stats['total'],
-                    "fullMatchCount": stats['fullMatchCount'],
-                    "partialMatchCount": stats['partialMatchCount'],
-                    "noneMatchCount": stats['noneMatchCount'],
-                    "avgScore": stats['avgScore'],
-                    "suggestion": suggestion,
-                    "results": results
+                    "strategies": all_strategy_results
                 }
             }
-
-        # ==================== 步骤3: 返回所有策略的结果 ====================
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "strategies": all_strategy_results
+        except Exception as e:
+            logger.error(f"[AllocationService] process_allocation失败: {str(e)}", exc_info=True)
+            return {
+                "code": 500,
+                "message": f"调配分析失败: {str(e)}",
+                "data": {"strategies": {}}
             }
-        }
 
     async def _query_plans(self, project_unit: str, start_date: str, end_date: str,
                            plan_type: str, warehouse_code: str,
@@ -420,14 +410,16 @@ class AllocationService:
             'total': 0
         }
 
-        for idx, plan in enumerate(plans):
-            result = await self._process_single_plan(idx, plan, filtered_stocks, material_source_types, strategy, 
-                                                     warehouse_code, source_type, project_unit, 
-                                                     demand_start_date, demand_end_date, plan_type)
-
-            if result:
-                all_results.append(result)
-                self._update_stats(stats, result)
+        try:
+            for idx, plan in enumerate(plans):
+                result = await self._process_single_plan(idx, plan, filtered_stocks, material_source_types, strategy, 
+                                                         warehouse_code, source_type, project_unit, 
+                                                         demand_start_date, demand_end_date, plan_type)
+                if result:
+                    all_results.append(result)
+                    self._update_stats(stats, result)
+        except Exception as e:
+            logger.error(f"[AllocationService] _process_plans处理异常: {str(e)}", exc_info=True)
 
         stats['total'] = len(all_results)
         stats['avgScore'] = round(stats['totalScore'] / stats['total'], 1) if stats['total'] > 0 else 0
@@ -475,15 +467,18 @@ class AllocationService:
         logger.info(f"[AllocationService] 处理计划[{idx}]: planId={plan_id}, "
                     f"materialCode={material_code}, techSpecId={tech_spec_id}, demandQty={demand_qty}")
 
-        result = await self.allocation_agent.process_single_plan(
-            plan=plan,
-            all_stocks=filtered_stocks,
-            warehouse_code=warehouse_code,
-            strategy=strategy
-        )
+        try:
+            result = await self.allocation_agent.process_single_plan(
+                plan=plan,
+                all_stocks=filtered_stocks,
+                warehouse_code=warehouse_code,
+                strategy=strategy
+            )
 
-        if result:
-            # 直接使用 plan 的值覆盖 LLM 返回结果，避免幻觉
+            if not result:
+                logger.warning(f"[AllocationService] 计划[{idx}] agent返回空结果，跳过")
+                return None
+
             result['techSpecId'] = plan.get('techSpecId', '')
             result['materialDesc'] = plan.get('materialDesc', '')
             result['unit'] = plan.get('unit', '')
@@ -580,7 +575,10 @@ class AllocationService:
             self._save_allocation_result(plan, result, strategy, source_type, project_unit,
                                         demand_start_date, demand_end_date, plan_type)
 
-        return result
+            return result
+        except Exception as e:
+            logger.error(f"[AllocationService] 计划[{idx}]处理异常: planId={plan_id}, materialCode={material_code}, 错误: {str(e)}", exc_info=True)
+            return None
 
     def _get_available_stock(self, stocks: List[Dict[str, Any]], material_code: str, warehouse_code: str, tech_id: str = '') -> float:
         """获取指定物料在指定仓库的可用库存
