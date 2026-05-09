@@ -112,44 +112,38 @@ class InventoryAnalysisStreamService:
 
             yield "🔍 【阶段三：组合矩阵构建】\n"
             yield "   📌 当前需求：生成所有有效的仓库-物料-技术规范组合\n"
-            yield "   📌 执行动作：运用笛卡尔积算法，构建三维组合矩阵\n"
+            yield "   📌 执行动作：批量查询历史出库表，一次性获取所有有效组合\n"
             yield "   📌 数据用途：\n"
             yield "      • 分析单元：每个组合是一个独立的库存分析单元\n"
             yield "      • 数据关联：通过组合关联库存和消耗数据\n"
             yield "      • 批量分析：支持一次性分析多个组合\n"
             yield "   📌 技术要点：\n"
-            yield "      • 笛卡尔积：生成所有可能的组合\n"
-            yield "      • 数据过滤：剔除无效组合（无技术规范ID）\n"
-            yield "      • 索引优化：建立组合索引，加速数据查询\n"
-            yield "   └─ 正在执行组合矩阵构建...\n"
-            logger.info("正在执行组合矩阵构建...")
-            all_combinations = []
-            for warehouse_code in warehouse_codes:
-                for material_code in material_codes:
-                    try:
-                        tech_ids = await asyncio.wait_for(
-                            self._service._get_tech_ids_by_warehouse_material(
-                                warehouse_code, material_code, start_date, end_date
-                            ),
-                            timeout=30
-                        )
-                    except asyncio.TimeoutError:
-                        yield f"   ⚠️ [{warehouse_code}×{material_code}] 查询超时(>30s)，跳过该组合\n"
-                        continue
-                    if not tech_ids:
-                        continue
-                    for tech_id in tech_ids:
-                        all_combinations.append({
-                            'warehouse_code': warehouse_code,
-                            'material_code': material_code,
-                            'tech_id': tech_id
-                        })
+            yield "      • 批量查询：单次SQL查询替代N×M次逐条查询\n"
+            yield "      • 数据过滤：只包含有历史出库记录的有效组合\n"
+            yield "      • 数量限制：最多分析200个组合\n"
+            yield "   └─ 正在执行组合矩阵批量查询...\n"
+            logger.info(f"组合矩阵批量查询开始, warehouses={len(warehouse_codes)}, materials={len(material_codes)}")
+            try:
+                all_combinations = await asyncio.wait_for(
+                    self._service._get_valid_combinations(warehouse_codes, material_codes, start_date, end_date),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                yield "❌ 组合矩阵查询超时：数据库响应超过60秒\n"
+                yield "   💡 建议：请缩小仓库或物料范围\n"
+                return
+
+            if len(all_combinations) > 200:
+                yield f"   ⚠️ 有效组合过多({len(all_combinations)}个)，限制前200个进行分析\n"
+                logger.warning(f"有效组合数({len(all_combinations)})超过上限, 截取前200个")
+                all_combinations = all_combinations[:200]
 
             yield f"✅ 组合矩阵构建完成\n"
-            yield f"   └─ 共生成 {len(all_combinations)} 个有效组合\n"
-            yield f"   └─ 组合分布：平均每个仓库关联 {len(all_combinations)/len(warehouse_codes):.1f} 个组合\n"
+            yield f"   └─ 共获取 {len(all_combinations)} 个有效组合\n"
+            if warehouse_codes:
+                yield f"   └─ 组合分布：覆盖 {len(set(c['warehouse_code'] for c in all_combinations))} 个仓库\n"
             yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
-            logger.info("组合矩阵构建完成")
+            logger.info(f"组合矩阵构建完成, 共{len(all_combinations)}个组合")
             
             if not all_combinations:
                 yield "❌ 组合构建失败：未找到有效的仓库×物料×技术规范组合\n"

@@ -792,6 +792,68 @@ class InventoryAnalysisService:
             "suggestedAction": "待分析"
         }
 
+    async def _get_valid_combinations(self, warehouse_codes: List[str], material_codes: List[str],
+                                       start_date: str = None, end_date: str = None) -> List[Dict[str, str]]:
+        """批量查询所有有效的仓库-物料-技术规范组合
+        
+        单次SQL查询替代N×M次逐条查询，避免组合爆炸
+        """
+        combinations = []
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            start_month = None
+            end_month = None
+            if start_date and len(start_date) == 6:
+                start_month = f"{start_date[:4]}-{start_date[4:]}"
+            if end_date and len(end_date) == 6:
+                end_month = f"{end_date[:4]}-{end_date[4:]}"
+
+            query = '''
+                SELECT DISTINCT fd_warehouse_code, fd_material_code, fd_tech_id
+                FROM mt_historical_outbound
+                WHERE 1=1
+            '''
+            params = []
+
+            if warehouse_codes:
+                placeholders = ','.join(['%s'] * len(warehouse_codes))
+                query += f" AND fd_warehouse_code IN ({placeholders})"
+                params.extend(warehouse_codes)
+
+            if material_codes:
+                placeholders = ','.join(['%s'] * len(material_codes))
+                query += f" AND fd_material_code IN ({placeholders})"
+                params.extend(material_codes)
+
+            if start_month:
+                query += " AND fd_posting_month >= %s"
+                params.append(start_month)
+
+            if end_month:
+                query += " AND fd_posting_month <= %s"
+                params.append(end_month)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                combinations.append({
+                    'warehouse_code': row['fd_warehouse_code'],
+                    'material_code': str(row['fd_material_code']),
+                    'tech_id': row['fd_tech_id']
+                })
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisService] 批量查询组合失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return combinations
+
     async def _get_tech_ids_by_warehouse_material(self, warehouse_code: str, material_code: str,
                                                    start_date: str = None, end_date: str = None) -> List[str]:
         tech_ids = []
