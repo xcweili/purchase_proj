@@ -71,7 +71,7 @@ class AllocationMatchRequest(BaseModel):
     demandEndDate: str = Field(default="", description="需求结束时间")
     planType: str = Field(default="", description="计划类型")
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
-    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
+    analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
 
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMM）")
@@ -80,11 +80,11 @@ class InventoryAnalysisRequest(BaseModel):
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
     seasonFactorWeight: Optional[float] = Field(default=None, description="季节因子权重")
     safetyRedundancyRatio: Optional[float] = Field(default=None, description="安全冗余比例")
-    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
+    analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
 
 class SupplierMatchRequest(BaseModel):
     plans: Optional[List[Dict[str, Any]]] = Field(default=None, description="补货计划列表")
-    analyzeMode: str = Field(default="iterative", description="分析模式：batch（批量）/iterative（迭代）")
+    analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")

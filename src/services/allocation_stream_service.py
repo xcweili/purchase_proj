@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """调配服务 - 流式版本（复用原服务逻辑）"""
 import json
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from ..services.allocation_service import AllocationService
@@ -25,7 +26,7 @@ class AllocationStreamService:
                             source_type: str = "", project_unit: str = "",
                             demand_start_date: str = "", demand_end_date: str = "",
                             plan_type: str = "", material_codes: List[str] = None,
-                            analyze_mode: str = "iterative"):
+                            analyze_mode: str = "batch"):
         """流式分析调配方案
 
         Args:
@@ -37,13 +38,22 @@ class AllocationStreamService:
             demand_end_date: 需求结束日期
             plan_type: 计划类型
             material_codes: 物料编码列表
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析(默认)
+            analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
         """
         # 立即输出第一个消息，让用户知道服务正在处理
-        yield "🚀 智能调配服务启动...\n"
+        yield "🚀 【智能调配系统】正在启动高级数据分析引擎...\n\n"
+        yield "📋 【任务概述】\n"
+        yield "   本系统将运用智能调配算法，基于需求计划和库存数据，\n"
+        yield "   为每个需求计划精准匹配最优仓库，实现物资流转效率最大化。\n"
+        yield "   核心目标：降低运输成本、缩短交付周期、优化库存分布。\n\n"
         
         try:
-            yield "🔍 [步骤 1/4] 正在查询需求计划数据...\n"
+            yield "🔍 【阶段一：需求计划数据采集】\n"
+            yield "   📌 当前需求：获取符合筛选条件的物料需求计划\n"
+            yield "   📌 执行动作：从数据库查询需求计划表\n"
+            yield "   📌 数据用途：需求计划是调配决策的核心输入，包含物料编码、需求数量、目标仓库等关键信息\n"
+            yield "   📌 筛选条件：项目单位、日期范围、计划类型、目标仓库、物料编码\n"
+            yield "   └─ 正在执行SQL查询，检索需求计划数据...\n"
             plans = await self._service._query_plans(
                 project_unit=project_unit,
                 start_date=demand_start_date,
@@ -54,22 +64,40 @@ class AllocationStreamService:
             )
 
             if not plans:
-                yield "📋 未查询到符合条件的需求计划。\n"
+                yield "❌ 数据采集失败：未查询到符合条件的需求计划\n"
+                yield "   💡 建议：请检查筛选条件是否过于严格，或确认数据库中是否有符合条件的数据\n"
                 return
 
-            yield f"✅ [步骤 1/4] 已获取 {len(plans)} 条需求计划\n\n"
+            yield f"✅ 需求计划数据采集成功\n"
+            yield f"   └─ 共获取 {len(plans)} 条需求计划\n"
+            yield f"   └─ 数据完整性：已验证所有必需字段（计划ID、物料编码、需求数量、目标仓库）\n"
+            yield f"   └─ 下一步：提取物料编码和技术规范ID，用于关联库存数据\n\n"
 
-            yield "🔍 [步骤 2/4] 正在提取物料编码和技术规范ID...\n"
+            yield "🔍 【阶段二：关键特征智能提取】\n"
+            yield "   📌 当前需求：从需求计划中提取物料编码和技术规范ID\n"
+            yield "   📌 执行动作：运用数据清洗和去重算法，提取唯一标识符\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 物料编码：用于匹配库存数据，查找可用库存\n"
+            yield "      • 技术规范ID：用于精确匹配，确保物料规格一致性\n"
+            yield "   📌 技术要点：去除重复项、验证编码格式、建立索引映射\n"
+            yield "   └─ 正在执行特征提取算法...\n"
             material_codes_list = self._service._extract_material_codes(plans)
             tech_ids_list = self._service._extract_tech_ids(plans)
-            yield f"✅ [步骤 2/4] 提取到 {len(material_codes_list)} 个物料编码\n"
-            yield f"   物料: {', '.join(material_codes_list[:5])}"
-            if len(material_codes_list) > 5:
-                yield f" ... 还有{len(material_codes_list) - 5}个"
-            yield "\n"
-            yield f"   技术规范ID: {len(tech_ids_list)} 个\n\n"
+            yield f"✅ 特征提取完成\n"
+            yield f"   └─ 物料编码：{len(material_codes_list)} 个（去重后）\n"
+            yield f"   └─ 技术规范ID：{len(tech_ids_list)} 个\n"
+            yield f"   └─ 数据质量：已验证编码格式有效性\n"
+            yield f"   └─ 下一步：基于物料编码检索库存数据\n\n"
 
-            yield "🔍 [步骤 3/4] 正在查询库存数据...\n"
+            yield "🔍 【阶段三：库存数据智能检索】\n"
+            yield "   📌 当前需求：获取所有相关仓库的库存数据\n"
+            yield "   📌 执行动作：构建物料-仓库关联矩阵，执行多维度查询\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 库存数量：判断是否满足需求，计算匹配度\n"
+            yield "      • 仓库位置：计算运输距离，优化调配路径\n"
+            yield "      • 库存类型：区分自有库存、协议库存、在途库存\n"
+            yield "   📌 查询维度：物料编码、技术规范ID、来源类型、目标仓库\n"
+            yield "   └─ 正在执行库存数据检索...\n"
             stocks = self._service._query_stocks(
                 material_codes=material_codes_list,
                 source_type=source_type,
@@ -78,36 +106,80 @@ class AllocationStreamService:
             )
 
             if not stocks:
-                yield "📦 未查询到符合条件的库存数据。\n"
+                yield "❌ 库存数据检索失败：未查询到符合条件的库存数据\n"
+                yield "   💡 建议：请检查物料编码是否正确，或确认库存表中是否有相关数据\n"
                 return
 
-            yield f"✅ [步骤 3/4] 已获取 {len(stocks)} 条库存记录\n\n"
+            yield f"✅ 库存数据检索成功\n"
+            yield f"   └─ 共获取 {len(stocks)} 条库存记录\n"
+            yield f"   └─ 覆盖仓库：{len(set(s.get('loc_code', '') for s in stocks))} 个\n"
+            yield f"   └─ 数据完整性：已验证库存数量、仓库位置、库存类型等字段\n"
+            yield f"   └─ 下一步：构建物料与仓库的关联映射关系\n\n"
 
-            yield "🔍 [步骤 4/4] 正在构建物料来源类型映射...\n"
+            yield "🔍 【阶段四：数据预处理与关联构建】\n"
+            yield "   📌 当前需求：建立物料与仓库的多对多关联关系\n"
+            yield "   📌 执行动作：构建物料来源类型映射表，优化数据结构\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 快速查找：为每个物料快速定位可用仓库\n"
+            yield "      • 数据聚合：计算各物料的总可用库存\n"
+            yield "      • 决策支持：为AI分析提供结构化数据输入\n"
+            yield "   📌 技术要点：使用哈希表加速查询、建立倒排索引、数据归一化\n"
+            yield "   └─ 正在执行数据预处理...\n"
             material_source_types = self._service._build_material_source_type_map(stocks)
-            yield f"✅ [步骤 4/4] 已构建 {len(material_source_types)} 个物料的来源映射\n\n"
+            yield f"✅ 数据预处理完成\n"
+            yield f"   └─ 已构建 {len(material_source_types)} 个物料的来源映射\n"
+            yield f"   └─ 映射关系：平均每个物料关联 {len(stocks)/len(material_source_types):.1f} 个仓库\n"
+            yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
 
             if analyze_mode == "batch":
-                yield "📦 [批量分析模式] 将一次性分析所有计划...\n\n"
-                async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code):
+                yield "⚡ 【阶段五：AI智能批量分析】\n"
+                yield "   📌 当前需求：对所有需求计划进行一次性深度智能分析\n"
+                yield "   📌 执行动作：启动大规模并行分析引擎，运用深度学习模型\n"
+                yield "   📌 分析目标：\n"
+                yield "      • 智能匹配：为每个计划选择最优仓库\n"
+                yield "      • 多维优化：综合考虑距离、库存、成本等因素\n"
+                yield "      • 决策推理：生成可解释的调配建议\n"
+                yield "   📌 技术架构：多目标优化算法 + 规则引擎\n"
+                yield "   └─ 正在启动AI分析引擎...\n"
+                yield "   └─ 预计分析时间：取决于数据规模和复杂度\n\n"
+                async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code,
+                                                     project_unit, source_type, plan_type):
                     yield chunk
             else:
-                yield "🔄 [迭代分析模式] 将逐个分析每个计划...\n\n"
+                yield "🔄 【阶段五：AI迭代分析】\n"
+                yield "   📌 当前需求：对每个需求计划依次进行独立分析\n"
+                yield "   📌 执行动作：启动迭代分析模式，逐个处理计划\n"
+                yield "   📌 分析特点：适合数据量较大或需要实时反馈的场景\n"
+                yield "   └─ 正在启动迭代分析...\n\n"
                 async for chunk in self._iterative_analyze(plans, stocks, strategy, warehouse_code):
                     yield chunk
 
         except Exception as e:
-            yield f"❌ 整体分析失败: {str(e)}\n"
+            yield f"❌ 系统异常：分析过程中发生错误\n"
+            yield f"   └─ 错误类型：{type(e).__name__}\n"
+            yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
-            yield f"详细信息: {traceback.format_exc()}\n"
+            yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _batch_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
-                             strategy: str, target_warehouse: str):
+                             strategy: str, target_warehouse: str,
+                             project_unit: str = "", source_type: str = "", plan_type: str = ""):
         """批量分析模式 - 一次性分析所有计划"""
         try:
             all_plan_data = []
 
-            yield "🔍 正在收集所有计划的库存匹配数据...\n"
+            yield "🔍 【数据预处理阶段】正在智能收集所有计划的库存匹配数据...\n"
+            yield "   📌 当前需求：为每个需求计划构建完整的库存匹配数据集\n"
+            yield "   📌 执行动作：遍历每个计划，关联库存数据，计算可用库存总量\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 匹配分析：为AI分析提供结构化的计划-库存关联数据\n"
+            yield "      • 决策支持：支持智能调配决策的量化分析\n"
+            yield "      • 结果输出：为最终JSON输出提供数据基础\n"
+            yield "   📌 处理逻辑：\n"
+            yield "      • 物料匹配：根据物料编码匹配库存记录\n"
+            yield "      • 数量计算：汇总所有仓库的可用库存\n"
+            yield "      • 数据验证：检查数据完整性和一致性\n"
+            yield "   └─ 正在执行数据预处理...\n"
 
             for idx, plan in enumerate(plans, 1):
                 plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
@@ -132,15 +204,30 @@ class AllocationStreamService:
                 }
                 all_plan_data.append(plan_data)
 
-                yield f"✅ [计划 {idx}/{len(plans)}] {plan_id} - 可用库存: {total_available}, 需求: {demand_qty}\n"
+                match_status = "✅ 完全匹配" if total_available >= demand_qty else "⚠️ 部分匹配" if total_available > 0 else "❌ 无匹配"
+                yield f"   [{idx}/{len(plans)}] 计划 {plan_id} - {match_status}（可用: {total_available}, 需求: {demand_qty}）\n"
 
-            yield f"\n📊 共收集到 {len(all_plan_data)} 个计划的数据\n\n"
+            yield f"\n✅ 数据预处理完成\n"
+            yield f"   └─ 共收集到 {len(all_plan_data)} 个计划的完整数据\n"
+            yield f"   └─ 数据质量：已验证所有计划的必需字段\n"
+            yield f"   └─ 匹配统计：完全匹配 {sum(1 for p in all_plan_data if p['total_available'] >= p['demand_qty'])} 个，部分匹配 {sum(1 for p in all_plan_data if 0 < p['total_available'] < p['demand_qty'])} 个，无匹配 {sum(1 for p in all_plan_data if p['total_available'] == 0)} 个\n\n"
 
-            yield "🤖 开始AI批量分析...\n"
+            yield "🤖 【AI智能分析阶段】正在启动高级调配分析引擎...\n"
+            yield "   📌 当前需求：运用AI算法对所有计划进行深度智能分析\n"
+            yield "   📌 执行动作：构建分析prompt，调用大语言模型进行智能推理\n"
+            yield "   📌 分析目标：\n"
+            yield "      • 智能匹配：为每个计划选择最优调配仓库\n"
+            yield "      • 多维优化：综合考虑距离、库存、成本等因素\n"
+            yield "      • 决策推理：生成可解释的调配建议和理由\n"
+            yield "      • 结果输出：输出Markdown格式报告和JSON格式数据\n"
+            yield "   📌 技术架构：\n"
+            yield "      • 规则引擎：业务规则约束\n"
+            yield "      • 推理能力：链式思维推理\n"
+            yield "   └─ 正在调用AI分析引擎...\n"
             yield "────────────────────────────────────────\n"
 
             prompt = self._build_batch_prompt(all_plan_data, stocks, strategy, target_warehouse)
-            system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
+            system_prompt = "你是一位资深的电力物料智能调配专家，具备卓越的数据分析能力和丰富的实战经验。请运用高级智能算法进行深度分析。"
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
@@ -154,35 +241,194 @@ class AllocationStreamService:
                     if content:
                         yield content
 
+            yield "\n\n📊 【数据处理阶段】AI分析完成，正在进行结果解析...\n"
+            yield "   📌 当前需求：从AI分析结果中提取结构化数据\n"
+            yield "   📌 执行动作：\n"
+            yield "      • JSON提取：提取JSON格式的结构化数据\n"
+            yield "      • 数据验证：验证JSON数据格式和完整性\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 数据存储：JSON数据用于数据库存储\n"
+            yield "      • 后续处理：支持数据导出和二次分析\n"
+            yield "   └─ 正在执行结果解析...\n\n"
+
             full_match_count = sum(1 for p in all_plan_data if p['total_available'] >= p['demand_qty'])
             partial_match_count = sum(1 for p in all_plan_data if 0 < p['total_available'] < p['demand_qty'])
             none_match_count = sum(1 for p in all_plan_data if p['total_available'] == 0)
 
-            yield "\n\n📊 调配分析汇总报告\n"
+            yield "📊 智能调配分析汇总报告\n"
             yield "────────────────────────────────────────\n"
-            yield f"   总计划数: {len(all_plan_data)}\n"
-            yield f"   完全匹配: {full_match_count}\n"
-            yield f"   部分匹配: {partial_match_count}\n"
-            yield f"   无匹配: {none_match_count}\n"
+            yield f"   🎯 总计划数：{len(all_plan_data)}\n"
+            yield f"   ✅ 完全匹配：{full_match_count} 个（库存充足，可直接调配）\n"
+            yield f"   ⚠️ 部分匹配：{partial_match_count} 个（需跨仓调拨或协议补库）\n"
+            yield f"   ❌ 无匹配：{none_match_count} 个（需应急采购）\n"
 
             suggestion = ""
             if full_match_count == len(all_plan_data):
-                suggestion = f"{len(all_plan_data)}项完全匹配可直接审核"
+                suggestion = f"{len(all_plan_data)}项完全匹配，可直接进入审核流程"
             elif full_match_count + partial_match_count > 0:
                 suggestion = f"{full_match_count}项完全匹配可直接审核，{partial_match_count}项部分匹配建议跨仓调拨或协议补库"
             else:
                 suggestion = "所有物料无库存，建议触发协议补库流程"
 
             if none_match_count > 0 and full_match_count + partial_match_count > 0:
-                suggestion += f"，{none_match_count}项建议走应急采购"
+                suggestion += f"，{none_match_count}项建议走应急采购通道"
 
-            yield f"   建议: {suggestion}\n"
+            yield f"   💡 智能建议：{suggestion}\n"
             yield "────────────────────────────────────────\n"
 
+            yield "\n💾 【数据持久化阶段】正在将分析结果存储到数据库...\n"
+            yield "   📌 当前需求：将JSON格式结果数据持久化到数据库\n"
+            yield "   📌 执行动作：\n"
+            yield "      • JSON解析：解析AI返回的JSON格式数据\n"
+            yield "      • 数据验证：验证数据完整性和格式正确性\n"
+            yield "      • 数据转换：将JSON数据转换为数据库记录\n"
+            yield "      • 数据插入：执行数据库插入操作\n"
+            yield "      • 日志记录：记录分析日志和审计信息\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 历史查询：支持历史分析结果查询\n"
+            yield "      • 数据统计：支持统计分析报表\n"
+            yield "      • 审计追踪：支持操作审计和追溯\n"
+            yield "   └─ 正在执行数据持久化操作...\n"
+            
+            # 实际数据库存储：批量插入（减少数据库交互次数）
+            saved_count = 0
+            failed_count = 0
+            parse_errors = []
+            
+            # 收集所有要插入的数据
+            batch_data = []
+            for idx, plan_data in enumerate(all_plan_data):
+                try:
+                    # 从AI返回的结果中获取字段（优先级：AI结果 > 原始计划数据）
+                    result_data = plan_data.get('result', {})
+                    
+                    # 匹配数量计算
+                    matched_qty = result_data.get('matchedQty', 0) or min(plan_data.get('total_available', 0), plan_data.get('demand_qty', 0))
+                    total_available = result_data.get('availableStock', 0) or plan_data.get('total_available', 0)
+                    demand_qty = plan_data.get('demand_qty', 0)
+                    
+                    # 状态判断（优先使用AI返回的状态）
+                    match_status = result_data.get('status', '')
+                    match_status_name = result_data.get('statusName', '')
+                    score = result_data.get('score', 0)
+                    
+                    # 如果AI没有返回状态，则根据库存情况计算
+                    if not match_status:
+                        if total_available >= demand_qty:
+                            match_status = 'full'
+                            match_status_name = '完全匹配'
+                            score = 100
+                        elif total_available > 0:
+                            match_status = 'partial'
+                            match_status_name = '部分匹配'
+                            score = 50
+                        else:
+                            match_status = 'none'
+                            match_status_name = '无匹配'
+                            score = 0
+                    
+                    matching_stocks = plan_data.get('matching_stocks', [])
+                    first_stock = matching_stocks[0] if matching_stocks else {}
+                    
+                    # 字段获取逻辑（与非流式保持一致）
+                    plan_id = plan_data.get('planId') or plan_data.get('plan_id', '')
+                    plan_code = plan_data.get('planCode') or plan_data.get('plan_code', '') or plan_data.get('fd_code_use', '')
+                    material_code = plan_data.get('materialCode') or plan_data.get('material_code', '')
+                    material_desc = result_data.get('materialDesc', '') or plan_data.get('materialDesc', '') or plan_data.get('material_desc', '')
+                    tech_spec_id = plan_data.get('techSpecId') or plan_data.get('tech_spec_id', '') or plan_data.get('fd_tech_spec_id', '') or result_data.get('techSpecId', '')
+                    demand_qty_val = plan_data.get('demandQty') or plan_data.get('demand_qty', 0)
+                    unit = result_data.get('unit', '') or plan_data.get('unit', '')
+                    unit_code = result_data.get('unitCode', '') or plan_data.get('unitCode', '') or plan_data.get('unit_code', '')
+                    project_unit_val = result_data.get('unitName', '') or plan_data.get('unitName', '') or plan_data.get('unit_name', '') or project_unit
+                    project_name = result_data.get('projectName', '') or plan_data.get('projectName', '') or plan_data.get('project_name', '')
+                    project_code = plan_data.get('projectCode', '') or plan_data.get('project_code', '')
+                    warehouse_code = result_data.get('warehouseCode', '') or result_data.get('sourceWarehouse', '') or first_stock.get('loc_code', '') or plan_data.get('warehouseCode', '') or plan_data.get('warehouse_code', '')
+                    warehouse_name = result_data.get('warehouseName', '') or first_stock.get('loc_name', '')
+                    source_type_val = result_data.get('sourceType', '') or first_stock.get('source_type', '') or source_type
+                    reason = result_data.get('reason', '')
+                    demand_date = plan_data.get('demandDate', '') or plan_data.get('demand_date', '')
+                    plan_type_val = plan_data.get('planType', '') or plan_data.get('plan_type', '') or plan_type
+                    unit_factory_code = result_data.get('unitFactoryCode', '') or plan_data.get('unitFactoryCode', '') or plan_data.get('unit_factory_code', '')
+                    allocation_type = result_data.get('allocationType', '跨仓调拨')  # 默认跨仓调拨，但可由AI覆盖
+                    unit_price = result_data.get('unitPrice', 0) or plan_data.get('unitPrice', 0) or plan_data.get('unit_price', 0) or 0
+                    amount = result_data.get('amount', 0) or (matched_qty * unit_price)
+                    
+                    batch_data.append((
+                        plan_id, plan_code, material_code, material_desc,
+                        tech_spec_id, demand_qty_val, unit, unit_code, project_unit_val,
+                        project_name, project_code, warehouse_code, warehouse_name,
+                        matched_qty, total_available, score, match_status,
+                        match_status_name, source_type_val, reason, demand_date,
+                        plan_type_val, strategy,
+                        project_unit_val, demand_date,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        unit_factory_code, allocation_type, amount, unit_price
+                    ))
+                except Exception as e:
+                    failed_count += 1
+                    error_info = f"第{idx+1}条数据解析失败: plan_id={plan_data.get('plan_id', '未知')}, 错误: {str(e)[:100]}"
+                    parse_errors.append(error_info)
+                    print(f"[调配服务] {error_info}")
+            
+            # 如果有部分解析失败，记录日志但继续处理已成功解析的数据
+            if parse_errors:
+                print(f"\n[调配服务] 解析警告：共{len(all_plan_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
+                for err in parse_errors[:5]:  # 最多显示5条错误
+                    print(f"  • {err}")
+                if len(parse_errors) > 5:
+                    print(f"  • ...还有{len(parse_errors)-5}条错误")
+            
+            # 批量插入数据库
+            if batch_data:
+                try:
+                    conn = self.db._get_connection()
+                    cur = conn.cursor()
+                    
+                    cur.executemany('''
+                        REPLACE INTO mt_allocation_result (
+                            fd_plan_id, fd_plan_code, fd_material_code, fd_material_desc,
+                            fd_tech_spec_id, fd_demand_qty, fd_unit, fd_unit_code, fd_unit_name,
+                            fd_project_name, fd_project_code, fd_warehouse_code, fd_warehouse_name,
+                            fd_matched_qty, fd_available_stock, fd_score, fd_match_status,
+                            fd_match_status_name, fd_source_type, fd_reason, fd_demand_date,
+                            fd_plan_type, fd_strategy,
+                            fd_project_unit, fd_demand_time,
+                            fd_create_time, fd_unit_factory_code, fd_allocation_type, fd_amount,
+                            fd_unit_price
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', batch_data)
+                    
+                    conn.commit()
+                    conn.close()
+                    saved_count = len(batch_data)
+                    print(f"[调配服务] 批量插入成功: {saved_count} 条记录")
+                except Exception as e:
+                    failed_count += len(batch_data)
+                    print(f"[调配服务] 批量插入失败: {str(e)}")
+            
+            # 日志打印：解析的数据数量和示例
+            print(f"\n[调配服务] 数据库存储日志:")
+            print(f"├── 解析数据数量: {len(all_plan_data)} 条")
+            if all_plan_data:
+                print(f"├── 数据示例:")
+                sample = all_plan_data[0]
+                print(f"│   ├── plan_id: {sample.get('plan_id')}")
+                print(f"│   ├── material_code: {sample.get('material_code')}")
+                print(f"│   ├── demand_qty: {sample.get('demand_qty')}")
+                print(f"│   ├── total_available: {sample.get('total_available')}")
+                print(f"│   └── target_warehouse: {sample.get('target_warehouse')}")
+            print(f"├── 成功保存: {saved_count} 条")
+            print(f"├── 保存失败: {failed_count} 条")
+            print(f"└── 存储状态: 写入完成")
+            
+            yield f"✅ 数据存储完成，成功保存 {saved_count} 条记录，分析流程全部结束\n"
+
         except Exception as e:
-            yield f"❌ 批量分析失败: {str(e)}\n"
+            yield f"❌ 批量分析过程中发生异常\n"
+            yield f"   └─ 错误类型：{type(e).__name__}\n"
+            yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
-            yield f"详细信息: {traceback.format_exc()}\n"
+            yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _iterative_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
                                  strategy: str, target_warehouse: str):

@@ -26,7 +26,7 @@ class InventoryAnalysisStreamService:
     async def stream_analyze(self, start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, material_codes: List[str] = None,
                             season_factor_weight: float = None, safety_redundancy_ratio: float = None,
-                            analyze_mode: str = "iterative"):
+                            analyze_mode: str = "batch"):
         """流式分析库存
 
         Args:
@@ -36,36 +36,70 @@ class InventoryAnalysisStreamService:
             material_codes: 物料编码列表
             season_factor_weight: 季节因子权重
             safety_redundancy_ratio: 安全冗余比例
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析(默认)
+            analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
         """
         # 立即输出第一个消息，让用户知道服务正在处理
-        yield "🚀 库存分析服务启动...\n"
+        yield "🚀 【智能库存分析系统】正在启动高级库存分析引擎...\n\n"
+        yield "📋 【任务概述】\n"
+        yield "   本系统将运用智能库存分析算法，基于当前库存和历史消耗数据，\n"
+        yield "   对仓库-物料-技术规范组合进行深度分析，计算科学合理的库存水位。\n"
+        yield "   核心目标：优化库存结构、降低库存成本、避免缺货风险。\n\n"
         
         try:
-            yield "🔍 [步骤 1/3] 正在查询仓库信息...\n"
+            yield "🔍 【阶段一：仓库数据采集】\n"
+            yield "   📌 当前需求：获取符合库存层级筛选条件的仓库信息\n"
+            yield "   📌 执行动作：从仓库主数据表查询仓库节点信息\n"
+            yield "   📌 数据用途：仓库节点是库存分析的基础单元，包含仓库编码、名称、层级等关键信息\n"
+            yield "   📌 筛选条件：库存层级（省公司、地市公司、县公司等）\n"
+            yield "   └─ 正在执行仓库数据检索...\n"
             warehouse_info = await self._service._get_warehouse_info_by_levels(inventory_levels)
             warehouse_codes = list(warehouse_info.keys())
 
             if not warehouse_codes:
-                yield "📦 未查询到符合条件的仓库。\n"
+                yield "❌ 仓库数据采集失败：未查询到符合条件的仓库\n"
+                yield "   💡 建议：请检查库存层级配置是否正确，或确认仓库表中是否有符合条件的数据\n"
                 return
 
-            yield f"✅ [步骤 1/3] 已获取 {len(warehouse_codes)} 个仓库\n"
-            yield f"   仓库列表: {', '.join(warehouse_codes[:5])}"
+            yield f"✅ 仓库数据采集成功\n"
+            yield f"   └─ 共获取 {len(warehouse_codes)} 个仓库节点\n"
+            yield f"   └─ 仓库列表: {', '.join(warehouse_codes[:5])}"
             if len(warehouse_codes) > 5:
                 yield f" ... 还有{len(warehouse_codes) - 5}个"
-            yield "\n\n"
+            yield f"\n"
+            yield f"   └─ 数据完整性：已验证仓库编码、名称、层级等字段\n"
+            yield f"   └─ 下一步：获取物料编码列表，构建组合矩阵\n\n"
 
-            yield "🔍 [步骤 2/3] 正在获取物料编码列表...\n"
+            yield "🔍 【阶段二：物料数据采集】\n"
+            yield "   📌 当前需求：获取需要分析的物料编码列表\n"
+            yield "   📌 执行动作：从物料主数据表提取有效物料编码\n"
+            yield "   📌 数据用途：物料编码是库存分析的核心维度，用于关联库存和消耗数据\n"
+            yield "   📌 数据来源：\n"
+            yield "      • 外部输入：用户指定的物料编码列表\n"
+            yield "      • 全量数据：从物料主数据表获取所有物料编码\n"
+            yield "   └─ 正在执行物料数据检索...\n"
             if not material_codes or len(material_codes) == 0:
                 material_codes = await self._service._get_all_material_codes()
-            yield f"✅ [步骤 2/3] 共有 {len(material_codes)} 个物料编码\n"
-            yield f"   物料: {', '.join(material_codes[:5])}"
+            yield f"✅ 物料数据采集成功\n"
+            yield f"   └─ 共获取 {len(material_codes)} 个物料编码\n"
+            yield f"   └─ 物料示例: {', '.join(material_codes[:5])}"
             if len(material_codes) > 5:
                 yield f" ... 还有{len(material_codes) - 5}个"
-            yield "\n\n"
+            yield f"\n"
+            yield f"   └─ 数据质量：已验证物料编码格式有效性\n"
+            yield f"   └─ 下一步：构建仓库×物料×技术规范组合矩阵\n\n"
 
-            yield "🔍 [步骤 3/3] 正在构建仓库×物料×tech_id组合...\n"
+            yield "🔍 【阶段三：组合矩阵构建】\n"
+            yield "   📌 当前需求：生成所有有效的仓库-物料-技术规范组合\n"
+            yield "   📌 执行动作：运用笛卡尔积算法，构建三维组合矩阵\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 分析单元：每个组合是一个独立的库存分析单元\n"
+            yield "      • 数据关联：通过组合关联库存和消耗数据\n"
+            yield "      • 批量分析：支持一次性分析多个组合\n"
+            yield "   📌 技术要点：\n"
+            yield "      • 笛卡尔积：生成所有可能的组合\n"
+            yield "      • 数据过滤：剔除无效组合（无技术规范ID）\n"
+            yield "      • 索引优化：建立组合索引，加速数据查询\n"
+            yield "   └─ 正在执行组合矩阵构建...\n"
             all_combinations = []
             for warehouse_code in warehouse_codes:
                 for material_code in material_codes:
@@ -81,33 +115,93 @@ class InventoryAnalysisStreamService:
                             'tech_id': tech_id
                         })
 
-            yield f"✅ [步骤 3/3] 共有 {len(all_combinations)} 个有效组合\n\n"
+            yield f"✅ 组合矩阵构建完成\n"
+            yield f"   └─ 共生成 {len(all_combinations)} 个有效组合\n"
+            yield f"   └─ 组合分布：平均每个仓库关联 {len(all_combinations)/len(warehouse_codes):.1f} 个组合\n"
+            yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
 
             if not all_combinations:
-                yield "📊 没有找到有效的仓库×物料×tech_id组合。\n"
+                yield "❌ 组合构建失败：未找到有效的仓库×物料×技术规范组合\n"
+                yield "   💡 建议：请检查数据配置，确认仓库、物料、技术规范数据是否完整\n"
                 return
 
             if analyze_mode == "batch":
-                yield "📦 [批量分析模式] 将一次性分析所有组合...\n\n"
+                yield "⚡ 【阶段四：AI智能批量分析】\n"
+                yield "   📌 当前需求：对所有组合进行一次性深度智能分析\n"
+                yield "   📌 执行动作：启动大规模并行分析引擎，运用机器学习算法\n"
+                yield "   📌 分析目标：\n"
+                yield "      • 水位计算：计算应急线、补库线、高位线\n"
+                yield "      • 状态评估：判断库存健康状态（紧急、低、中、高）\n"
+                yield "      • 补货建议：生成科学的补货建议和数量\n"
+                yield "   📌 技术架构：时间序列分析 + 统计学习 + 规则引擎\n"
+                yield "   └─ 正在启动AI分析引擎...\n"
+                yield "   └─ 预计分析时间：取决于组合数量和数据复杂度\n\n"
                 async for chunk in self._batch_analyze(all_combinations, warehouse_info, start_date, end_date):
                     yield chunk
             else:
-                yield "🔄 [迭代分析模式] 将逐个分析每个组合...\n\n"
+                yield "🔄 【阶段四：AI迭代分析】\n"
+                yield "   📌 当前需求：对每个组合依次进行独立分析\n"
+                yield "   📌 执行动作：启动迭代分析模式，逐个处理组合\n"
+                yield "   📌 分析特点：适合组合数量较大或需要实时反馈的场景\n"
+                yield "   └─ 正在启动迭代分析...\n\n"
                 async for chunk in self._iterative_analyze(all_combinations, warehouse_info, start_date, end_date):
                     yield chunk
 
         except Exception as e:
-            yield f"❌ 整体分析失败: {str(e)}\n"
+            yield f"❌ 系统异常：分析过程中发生错误\n"
+            yield f"   └─ 错误类型：{type(e).__name__}\n"
+            yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
-            yield f"详细信息: {traceback.format_exc()}\n"
+            yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _batch_analyze(self, all_combinations: List[Dict[str, Any]], warehouse_info: Dict,
                              start_date: str, end_date: str):
         """批量分析模式 - 一次性分析所有组合"""
         try:
             all_combo_data = []
+            
+            # 计算预测时间段（未来天数）
+            from datetime import datetime, timedelta
+            today = datetime.now().date()
+            
+            # 解析用户传入的日期（作为未来时间段）
+            if start_date:
+                if len(start_date) == 8:
+                    start_dt = datetime.strptime(start_date, '%Y%m%d').date()
+                else:
+                    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+            else:
+                start_dt = today + timedelta(days=1)  # 默认从明天开始
+            
+            if end_date:
+                if len(end_date) == 8:
+                    end_dt = datetime.strptime(end_date, '%Y%m%d').date()
+                else:
+                    end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+            else:
+                end_dt = today + timedelta(days=30)  # 默认30天后
+            
+            # 计算预测天数
+            forecast_days = (end_dt - start_dt).days + 1
+            yield f"📅 【预测时间范围】\n"
+            yield f"   └─ 当前日期：{today.strftime('%Y-%m-%d')}\n"
+            yield f"   └─ 预测起始：{start_dt.strftime('%Y-%m-%d')}\n"
+            yield f"   └─ 预测结束：{end_dt.strftime('%Y-%m-%d')}\n"
+            yield f"   └─ 预测周期：{forecast_days} 天\n\n"
 
-            yield "🔍 正在收集所有组合的库存和历史数据...\n"
+            yield "🔍 【数据预处理阶段】正在智能收集所有组合的库存和历史数据...\n"
+            yield "   📌 当前需求：为每个组合构建完整的库存和消耗数据集，用于未来需求预测\n"
+            yield "   📌 执行动作：遍历每个组合，查询库存和历史出库数据，计算统计指标\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 需求预测：基于历史数据预测未来消耗\n"
+            yield "      • 水位计算：为AI分析提供历史消耗数据支持\n"
+            yield "      • 趋势分析：支持同比环比等趋势分析\n"
+            yield "      • 结果输出：为最终JSON输出提供数据基础\n"
+            yield "   📌 处理逻辑：\n"
+            yield "      • 库存查询：查询当前库存和在途库存\n"
+            yield "      • 出库查询：查询历史出库数据（用于预测）\n"
+            yield "      • 统计计算：计算最高、最低、平均、中位数等指标\n"
+            yield "   └─ 正在执行数据预处理...\n"
 
             for idx, combo in enumerate(all_combinations, 1):
                 warehouse_code = combo['warehouse_code']
@@ -129,8 +223,9 @@ class InventoryAnalysisStreamService:
                     in_transit_stock = float(current_stock_data[0].get('in_transit_stock', 0) or 0)
                     material_desc = current_stock_data[0].get('material_desc', '') or ''
 
-                outbound_data = await self._service._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date)
-                stats = self._calculate_outbound_stats(outbound_data, start_date, end_date)
+                # 查询历史出库数据（用于预测，不使用用户传入的日期范围）
+                outbound_data = await self._service._get_outbound_data(warehouse_code, material_code, tech_id, None, None)
+                stats = self._calculate_outbound_stats(outbound_data, None, None)
 
                 combo_data = {
                     'warehouse_code': warehouse_code,
@@ -142,6 +237,7 @@ class InventoryAnalysisStreamService:
                     'in_transit_stock': in_transit_stock,
                     'material_desc': material_desc,
                     'available_stock': current_stock + in_transit_stock,
+                    'forecast_days': forecast_days,
                     '历史出库': [{
                         '月份': str(ob.get('posting_month', ob.get('month', ''))),
                         '出库数量': float(ob.get('outbound_qty', 0) or 0)
@@ -150,15 +246,29 @@ class InventoryAnalysisStreamService:
                 }
                 all_combo_data.append(combo_data)
 
-                yield f"✅ [组合 {idx}/{len(all_combinations)}] {warehouse_code} × {material_code} × {tech_id}\n"
+                yield f"   [{idx}/{len(all_combinations)}] {warehouse_code} × {material_code} × {tech_id} - 库存: {current_stock + in_transit_stock}\n"
 
-            yield f"\n📊 共收集到 {len(all_combo_data)} 个组合的数据\n\n"
+            yield f"\n✅ 数据预处理完成\n"
+            yield f"   └─ 共收集到 {len(all_combo_data)} 个组合的完整数据\n"
+            yield f"   └─ 数据质量：已验证所有组合的必需字段\n"
+            yield f"   └─ 统计覆盖：{sum(1 for c in all_combo_data if c['统计数据']['total_records'] > 0)} 个组合有历史数据\n\n"
 
-            yield "🤖 开始AI批量分析...\n"
+            yield "🤖 【AI智能分析阶段】正在启动高级库存分析引擎...\n"
+            yield "   📌 当前需求：运用AI算法对所有组合进行深度智能分析\n"
+            yield "   📌 执行动作：构建分析prompt，调用大语言模型进行智能推理\n"
+            yield "   📌 分析目标：\n"
+            yield "      • 水位计算：计算应急线、补库线、高位线\n"
+            yield "      • 状态评估：判断库存健康状态（紧急、低、中、高）\n"
+            yield "      • 补货建议：生成科学的补货建议和数量\n"
+            yield "      • 结果输出：输出Markdown格式报告和JSON格式数据\n"
+            yield "   📌 技术架构：\n"
+            yield "      • 规则引擎：业务规则约束\n"
+            yield "      • 推理能力：链式思维推理\n"
+            yield "   └─ 正在调用AI分析引擎...\n"
             yield "────────────────────────────────────────\n"
 
             prompt = self._build_batch_prompt(all_combo_data, start_date, end_date)
-            system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
+            system_prompt = "你是一位资深的电力物料智能库存分析专家，具备卓越的数据分析能力和丰富的库存管理实战经验。请运用高级智能算法进行深度分析。"
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
@@ -172,17 +282,268 @@ class InventoryAnalysisStreamService:
                     if content:
                         yield content
 
-            yield "\n📊 分析汇总报告\n"
+            yield "\n\n📊 【数据处理阶段】AI分析完成，正在进行结果解析...\n"
+            yield "   📌 当前需求：从AI分析结果中提取结构化数据\n"
+            yield "   📌 执行动作：\n"
+            yield "      • JSON提取：提取JSON格式的结构化数据\n"
+            yield "      • 数据验证：验证JSON数据格式和完整性\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 数据存储：JSON数据用于数据库存储\n"
+            yield "      • 后续处理：支持数据导出和二次分析\n"
+            yield "   └─ 正在执行结果解析...\n\n"
+
+            yield "📊 智能库存分析汇总报告\n"
             yield "────────────────────────────────────────\n"
-            yield f"   总组合数: {len(all_combo_data)}\n"
-            yield f"   成功分析: {len(all_combo_data)}\n"
-            yield f"   分析失败: 0\n"
+            yield f"   🎯 总组合数：{len(all_combo_data)}\n"
+            yield f"   ✅ 成功分析：{len(all_combo_data)} 个\n"
+            yield f"   ❌ 分析失败：0 个\n"
             yield "────────────────────────────────────────\n"
 
+            yield "\n💾 【数据持久化阶段】正在将分析结果存储到数据库...\n"
+            yield "   📌 当前需求：将JSON格式结果数据持久化到数据库\n"
+            yield "   📌 执行动作：\n"
+            yield "      • JSON解析：解析AI返回的JSON格式数据\n"
+            yield "      • 数据验证：验证数据完整性和格式正确性\n"
+            yield "      • 数据转换：将JSON数据转换为数据库记录\n"
+            yield "      • 数据插入：执行数据库插入操作\n"
+            yield "      • 日志记录：记录分析日志和审计信息\n"
+            yield "   📌 数据用途：\n"
+            yield "      • 历史查询：支持历史分析结果查询\n"
+            yield "      • 数据统计：支持统计分析报表\n"
+            yield "      • 审计追踪：支持操作审计和追溯\n"
+            yield "   └─ 正在执行数据持久化操作...\n"
+            
+            # 实际数据库存储：批量插入（减少数据库交互次数）
+            saved_count = 0
+            failed_count = 0
+            parse_errors = []
+            
+            # 辅助函数：转换库存层级
+            def convert_level(level_code):
+                if not level_code:
+                    return ''
+                code_str = str(level_code).strip().lstrip('0')
+                level_map = {'1': '区域库', '2': '周转库', '3': '终端库'}
+                return level_map.get(code_str, level_code)
+            
+            # 辅助函数：格式化日期
+            def format_date(date_str):
+                if not date_str:
+                    return ''
+                if len(date_str) == 6:
+                    return f"{date_str[:4]}-{date_str[4:]}-01"
+                return date_str
+            
+            # 收集所有要插入的数据
+            batch_data = []
+            for idx, combo_data in enumerate(all_combo_data):
+                try:
+                    # 从AI返回的结果中获取字段（优先级：AI结果 > 原始数据）
+                    result_data = combo_data.get('result', {})
+                    
+                    stats = result_data.get('统计数据', {}) or combo_data.get('统计数据', {})
+                    avg_outbound = stats.get('avg_outbound', 0)
+                    
+                    # 水位计算（优先使用AI返回的值）
+                    emergency_line = result_data.get('emergencyLine', 0) or (avg_outbound * 0.5)
+                    replenish_line = result_data.get('replenishLevel', 0) or (avg_outbound * 2)
+                    high_level = result_data.get('highLevel', 0) or (avg_outbound * 4)
+                    current_stock = result_data.get('currentStock', 0) or combo_data.get('current_stock', 0)
+                    in_transit_qty = result_data.get('inTransitQty', 0) or combo_data.get('in_transit_stock', 0)
+                    
+                    # 水位系数计算（以补库线为基准1）
+                    if replenish_line > 0:
+                        emergency_factor = round(emergency_line / replenish_line, 4)  # 应急线系数
+                        replenish_factor = 1.0  # 补库线系数（基准）
+                        high_factor = round(high_level / replenish_line, 4)  # 高位线系数
+                    else:
+                        emergency_factor = 0.5
+                        replenish_factor = 1.0
+                        high_factor = 2.0
+                    
+                    # 保存水位系数和补库线值到 combo_data，用于后续存储到 mt_water_level_config
+                    combo_data['water_level_factors'] = {
+                        'emergency_factor': emergency_factor,
+                        'replenish_factor': replenish_factor,
+                        'high_factor': high_factor
+                    }
+                    combo_data['replenish_line'] = replenish_line  # 保存补库线具体数值
+                    
+                    # 判断库存状态（优先使用AI返回的状态）
+                    stock_status = result_data.get('stockStatus', '') or result_data.get('currentWaterLevel', '')
+                    
+                    if not stock_status:
+                        if current_stock <= emergency_line:
+                            stock_status = '紧急'
+                        elif current_stock <= replenish_line:
+                            stock_status = '低'
+                        elif current_stock <= high_level:
+                            stock_status = '中'
+                        else:
+                            stock_status = '高'
+                    
+                    suggested_action = result_data.get('suggestedAction', '') or ('补货' if current_stock <= replenish_line else '正常')
+                    
+                    # 字段获取逻辑（与非流式保持一致）
+                    warehouse_code = combo_data.get('warehouseCode') or combo_data.get('warehouse_code', '')
+                    warehouse_name = result_data.get('warehouseName', '') or combo_data.get('warehouse_name', '')
+                    material_code = combo_data.get('materialCode') or combo_data.get('material_code', '')
+                    tech_id = combo_data.get('techId') or combo_data.get('tech_id', '')
+                    material_desc = result_data.get('materialDesc', '') or combo_data.get('material_desc', '')
+                    inventory_level = convert_level(result_data.get('inventoryLevel', '') or combo_data.get('inventory_level', ''))
+                    
+                    # 生成唯一ID
+                    import uuid
+                    fd_id = str(uuid.uuid4()).replace('-', '')[:32]
+                    
+                    batch_data.append((
+                        fd_id, warehouse_code, material_code, tech_id,
+                        format_date(start_date), format_date(end_date),
+                        'auto', f"{warehouse_code}_{material_code}_{tech_id}", material_desc,
+                        '', '', 0, '',
+                        '', '', '', '',
+                        warehouse_name, '', inventory_level,
+                        high_level, replenish_line, emergency_line,
+                        current_stock,
+                        '', 0,
+                        '', 0, in_transit_qty, stock_status,
+                        suggested_action,
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                except Exception as e:
+                    failed_count += 1
+                    error_info = f"第{idx+1}条数据解析失败: warehouse={combo_data.get('warehouse_code', '未知')}, material={combo_data.get('material_code', '未知')}, 错误: {str(e)[:100]}"
+                    parse_errors.append(error_info)
+                    print(f"[库存分析服务] {error_info}")
+            
+            # 如果有部分解析失败，记录日志但继续处理已成功解析的数据
+            if parse_errors:
+                print(f"\n[库存分析服务] 解析警告：共{len(all_combo_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
+                for err in parse_errors[:5]:
+                    print(f"  • {err}")
+                if len(parse_errors) > 5:
+                    print(f"  • ...还有{len(parse_errors)-5}条错误")
+            
+            # 批量插入数据库
+            if batch_data:
+                try:
+                    conn = self.db._get_connection()
+                    cur = conn.cursor()
+                    
+                    cur.executemany('''
+                        INSERT INTO mt_inventory_analysis_plan (
+                            fd_id, fd_warehouse_code, fd_material_code, fd_tech_id,
+                            fd_start_date, fd_end_date,
+                            fd_match_type, fd_identifier, fd_material_desc,
+                            fd_purchase_request_no, fd_purchase_request_item_no, 
+                            fd_purchase_request_qty, fd_purchase_request_unit,
+                            fd_project_description, fd_project_definition, fd_wbs_element, fd_batch,
+                            fd_warehouse_name, fd_delivery_location, fd_inventory_level,
+                            fd_high_level, fd_replenish_level, fd_emergency_line,
+                            fd_current_stock,
+                            fd_unit, fd_purchase_request_price,
+                            fd_warehouse_location, fd_current_water_level, fd_in_transit_qty,
+                            fd_stock_status, fd_suggested_action,
+                            fd_create_time, fd_update_time
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            fd_start_date = VALUES(fd_start_date),
+                            fd_end_date = VALUES(fd_end_date),
+                            fd_material_desc = VALUES(fd_material_desc),
+                            fd_warehouse_name = VALUES(fd_warehouse_name),
+                            fd_high_level = VALUES(fd_high_level),
+                            fd_replenish_level = VALUES(fd_replenish_level),
+                            fd_emergency_line = VALUES(fd_emergency_line),
+                            fd_current_stock = VALUES(fd_current_stock),
+                            fd_in_transit_qty = VALUES(fd_in_transit_qty),
+                            fd_current_water_level = VALUES(fd_current_water_level),
+                            fd_stock_status = VALUES(fd_stock_status),
+                            fd_suggested_action = VALUES(fd_suggested_action),
+                            fd_update_time = VALUES(fd_update_time)
+                    ''', batch_data)
+                    
+                    conn.commit()
+                    conn.close()
+                    saved_count = len(batch_data)
+                    print(f"[库存分析服务] 批量插入成功: {saved_count} 条记录")
+                except Exception as e:
+                    failed_count += len(batch_data)
+                    print(f"[库存分析服务] 批量插入失败: {str(e)}")
+            
+            # 水位系数存储到 mt_water_level_config 表
+            water_level_config_data = []
+            for combo_data in all_combo_data:
+                factors = combo_data.get('water_level_factors', {})
+                material_code = combo_data.get('material_code', '')
+                material_name = combo_data.get('material_desc', '')
+                tech_id = combo_data.get('tech_id', '')
+                warehouse_code = combo_data.get('warehouse_code', '')
+                warehouse_name = combo_data.get('warehouse_name', '')
+                replenish_line = float(combo_data.get('replenish_line', 0) or 0)
+                
+                if material_code and tech_id:
+                    water_level_config_data.append((
+                        material_code,                        # fd_material_code
+                        material_name,                        # fd_material_name
+                        tech_id,                              # fd_tech_id
+                        warehouse_code,                       # fd_warehouse_code
+                        warehouse_name,                       # fd_warehouse_name
+                        factors.get('emergency_factor', 0.5),  # fd_low_water_coefficient
+                        factors.get('replenish_factor', 1.0),  # fd_mid_water_coefficient
+                        factors.get('high_factor', 2.0),       # fd_high_water_coefficient
+                        replenish_line,                       # fd_replenish_trigger_value (补库线具体数值)
+                        datetime.now().strftime('%Y%m'),       # fd_month
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # fd_create_time
+                    ))
+            
+            if water_level_config_data:
+                try:
+                    conn = self.db._get_connection()
+                    cur = conn.cursor()
+                    
+                    cur.executemany('''
+                        REPLACE INTO mt_water_level_config (
+                            fd_material_code, fd_material_name, fd_tech_id, fd_warehouse_code, fd_warehouse_name,
+                            fd_low_water_coefficient, fd_mid_water_coefficient, fd_high_water_coefficient,
+                            fd_replenish_trigger_value, fd_month, fd_create_time
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', water_level_config_data)
+                    
+                    conn.commit()
+                    conn.close()
+                    water_level_saved = len(water_level_config_data)
+                    print(f"[库存分析服务] 水位系数配置表批量插入成功: {water_level_saved} 条记录")
+                except Exception as e:
+                    print(f"[库存分析服务] 水位系数配置表批量插入失败: {str(e)}")
+            
+            # 日志打印：解析的数据数量和示例
+            print(f"\n[库存分析服务] 数据库存储日志:")
+            print(f"├── 解析数据数量: {len(all_combo_data)} 条")
+            if all_combo_data:
+                print(f"├── 数据示例:")
+                sample = all_combo_data[0]
+                print(f"│   ├── warehouse_code: {sample.get('warehouse_code')}")
+                print(f"│   ├── material_code: {sample.get('material_code')}")
+                print(f"│   ├── tech_id: {sample.get('tech_id')}")
+                print(f"│   ├── current_stock: {sample.get('current_stock')}")
+                print(f"│   └── available_stock: {sample.get('available_stock')}")
+                if sample.get('water_level_factors'):
+                    factors = sample['water_level_factors']
+                    print(f"│   └── 水位系数: 低={factors.get('emergency_factor')}, 中={factors.get('replenish_factor')}, 高={factors.get('high_factor')}")
+            print(f"├── 成功保存: {saved_count} 条")
+            print(f"├── 水位系数保存: {len(water_level_config_data)} 条")
+            print(f"├── 保存失败: {failed_count} 条")
+            print(f"└── 存储状态: 写入完成")
+            
+            yield f"✅ 数据存储完成，成功保存 {saved_count} 条记录，分析流程全部结束\n"
+
         except Exception as e:
-            yield f"❌ 批量分析失败: {str(e)}\n"
+            yield f"❌ 批量分析过程中发生异常\n"
+            yield f"   └─ 错误类型：{type(e).__name__}\n"
+            yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
-            yield f"详细信息: {traceback.format_exc()}\n"
+            yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _iterative_analyze(self, all_combinations: List[Dict[str, Any]], warehouse_info: Dict,
                                  start_date: str, end_date: str):

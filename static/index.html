@@ -530,12 +530,12 @@
                             <div class="param-group">
                                 <label class="param-label">分析模式</label>
                                 <div class="radio-group">
-                                    <label class="radio-label selected" data-agent="allocation" data-mode="iterative">
-                                        <input type="radio" name="allocation-analyze-mode" value="iterative" checked>
+                                    <label class="radio-label" data-agent="allocation" data-mode="iterative">
+                                        <input type="radio" name="allocation-analyze-mode" value="iterative">
                                         <span>🔄 迭代模式：逐个分析计划</span>
                                     </label>
-                                    <label class="radio-label" data-agent="allocation" data-mode="batch">
-                                        <input type="radio" name="allocation-analyze-mode" value="batch">
+                                    <label class="radio-label selected" data-agent="allocation" data-mode="batch">
+                                        <input type="radio" name="allocation-analyze-mode" value="batch" checked>
                                         <span>📦 批量模式：一次性分析所有计划</span>
                                     </label>
                                 </div>
@@ -545,11 +545,11 @@
                         <div id="inventory-params" class="params-section" style="display: none;">
                             <div class="param-group">
                                 <label class="param-label">开始日期</label>
-                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYYMM" value="202201">
+                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYY-MM-DD" value="2026-05-10">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">结束日期</label>
-                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYYMM" value="202512">
+                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYY-MM-DD" value="2026-05-24">
                             </div>
                             <div class="param-group">
                                 <label class="param-label">库存层级（逗号分隔）</label>
@@ -562,12 +562,12 @@
                             <div class="param-group">
                                 <label class="param-label">分析模式</label>
                                 <div class="radio-group">
-                                    <label class="radio-label selected" data-agent="inventory" data-mode="iterative">
-                                        <input type="radio" name="inventory-analyze-mode" value="iterative" checked>
+                                    <label class="radio-label" data-agent="inventory" data-mode="iterative">
+                                        <input type="radio" name="inventory-analyze-mode" value="iterative">
                                         <span>🔄 迭代模式：逐个分析组合</span>
                                     </label>
-                                    <label class="radio-label" data-agent="inventory" data-mode="batch">
-                                        <input type="radio" name="inventory-analyze-mode" value="batch">
+                                    <label class="radio-label selected" data-agent="inventory" data-mode="batch">
+                                        <input type="radio" name="inventory-analyze-mode" value="batch" checked>
                                         <span>📦 批量模式：一次性分析所有组合</span>
                                     </label>
                                 </div>
@@ -583,12 +583,12 @@
                             <div class="param-group">
                                 <label class="param-label">分析模式</label>
                                 <div class="radio-group">
-                                    <label class="radio-label selected" data-agent="supplier" data-mode="iterative">
-                                        <input type="radio" name="supplier-analyze-mode" value="iterative" checked>
+                                    <label class="radio-label" data-agent="supplier" data-mode="iterative">
+                                        <input type="radio" name="supplier-analyze-mode" value="iterative">
                                         <span>🔄 迭代模式：逐个分析计划</span>
                                     </label>
-                                    <label class="radio-label" data-agent="supplier" data-mode="batch">
-                                        <input type="radio" name="supplier-analyze-mode" value="batch">
+                                    <label class="radio-label selected" data-agent="supplier" data-mode="batch">
+                                        <input type="radio" name="supplier-analyze-mode" value="batch" checked>
                                         <span>📦 批量模式：一次性分析所有计划</span>
                                     </label>
                                 </div>
