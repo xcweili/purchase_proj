@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """调配服务 - 流式版本（复用原服务逻辑）"""
+import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from ..services.allocation_service import AllocationService
 from ..services.context_manager import ContextManager
@@ -47,6 +51,11 @@ class AllocationStreamService:
         yield "   为每个需求计划精准匹配最优仓库，实现物资流转效率最大化。\n"
         yield "   核心目标：降低运输成本、缩短交付周期、优化库存分布。\n\n"
         
+        logger.info(f"开始流式调配分析, strategy={strategy}, warehouse_code={warehouse_code}, "
+                    f"source_type={source_type}, project_unit={project_unit}, "
+                    f"demand_start_date={demand_start_date}, demand_end_date={demand_end_date}, "
+                    f"plan_type={plan_type}, material_codes={material_codes}, analyze_mode={analyze_mode}")
+        
         try:
             yield "🔍 【阶段一：需求计划数据采集】\n"
             yield "   📌 当前需求：获取符合筛选条件的物料需求计划\n"
@@ -54,14 +63,25 @@ class AllocationStreamService:
             yield "   📌 数据用途：需求计划是调配决策的核心输入，包含物料编码、需求数量、目标仓库等关键信息\n"
             yield "   📌 筛选条件：项目单位、日期范围、计划类型、目标仓库、物料编码\n"
             yield "   └─ 正在执行SQL查询，检索需求计划数据...\n"
-            plans = await self._service._query_plans(
-                project_unit=project_unit,
-                start_date=demand_start_date,
-                end_date=demand_end_date,
-                plan_type=plan_type,
-                warehouse_code=warehouse_code,
-                material_codes=material_codes
-            )
+            logger.info(f"正在查询需求计划, project_unit={project_unit}, plan_type={plan_type}, "
+                        f"warehouse_code={warehouse_code}, material_codes={material_codes}")
+            try:
+                plans = await asyncio.wait_for(
+                    self._service._query_plans(
+                        project_unit=project_unit,
+                        start_date=demand_start_date,
+                        end_date=demand_end_date,
+                        plan_type=plan_type,
+                        warehouse_code=warehouse_code,
+                        material_codes=material_codes
+                    ),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                yield "❌ 需求计划查询超时：数据库响应超过30秒\n"
+                yield "   💡 建议：请检查数据库连接状态或减少查询范围\n"
+                return
+            logger.info(f"需求计划查询完成, 共获取 {len(plans)} 条")
 
             if not plans:
                 yield "❌ 数据采集失败：未查询到符合条件的需求计划\n"
@@ -98,6 +118,8 @@ class AllocationStreamService:
             yield "      • 库存类型：区分自有库存、协议库存、在途库存\n"
             yield "   📌 查询维度：物料编码、技术规范ID、来源类型、目标仓库\n"
             yield "   └─ 正在执行库存数据检索...\n"
+            logger.info(f"正在查询库存数据, material_codes_count={len(material_codes_list)}, "
+                        f"source_type={source_type}, target_warehouse={warehouse_code}")
             stocks = self._service._query_stocks(
                 material_codes=material_codes_list,
                 source_type=source_type,
@@ -115,6 +137,8 @@ class AllocationStreamService:
             yield f"   └─ 覆盖仓库：{len(set(s.get('loc_code', '') for s in stocks))} 个\n"
             yield f"   └─ 数据完整性：已验证库存数量、仓库位置、库存类型等字段\n"
             yield f"   └─ 下一步：构建物料与仓库的关联映射关系\n\n"
+            logger.info(f"库存数据检索完成, 共 {len(stocks)} 条记录, "
+                        f"覆盖 {len(set(s.get('loc_code', '') for s in stocks))} 个仓库")
 
             yield "🔍 【阶段四：数据预处理与关联构建】\n"
             yield "   📌 当前需求：建立物料与仓库的多对多关联关系\n"
@@ -130,6 +154,7 @@ class AllocationStreamService:
             yield f"   └─ 已构建 {len(material_source_types)} 个物料的来源映射\n"
             yield f"   └─ 映射关系：平均每个物料关联 {len(stocks)/len(material_source_types):.1f} 个仓库\n"
             yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
+            logger.info(f"数据预处理完成, {len(material_source_types)} 个物料来源映射")
 
             if analyze_mode == "batch":
                 yield "⚡ 【阶段五：AI智能批量分析】\n"
@@ -142,6 +167,7 @@ class AllocationStreamService:
                 yield "   📌 技术架构：多目标优化算法 + 规则引擎\n"
                 yield "   └─ 正在启动AI分析引擎...\n"
                 yield "   └─ 预计分析时间：取决于数据规模和复杂度\n\n"
+                logger.info(f"启动批量调配分析, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
                 async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code,
                                                      project_unit, source_type, plan_type):
                     yield chunk
@@ -151,6 +177,7 @@ class AllocationStreamService:
                 yield "   📌 执行动作：启动迭代分析模式，逐个处理计划\n"
                 yield "   📌 分析特点：适合数据量较大或需要实时反馈的场景\n"
                 yield "   └─ 正在启动迭代分析...\n\n"
+                logger.info(f"启动迭代调配分析, plans={len(plans)}, strategy={strategy}")
                 async for chunk in self._iterative_analyze(plans, stocks, strategy, warehouse_code):
                     yield chunk
 
@@ -165,6 +192,7 @@ class AllocationStreamService:
                              strategy: str, target_warehouse: str,
                              project_unit: str = "", source_type: str = "", plan_type: str = ""):
         """批量分析模式 - 一次性分析所有计划"""
+        logger.info(f"_batch_analyze 开始, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
         try:
             all_plan_data = []
 
@@ -228,9 +256,11 @@ class AllocationStreamService:
 
             prompt = self._build_batch_prompt(all_plan_data, stocks, strategy, target_warehouse)
             system_prompt = "你是一位资深的电力物料智能调配专家，具备卓越的数据分析能力和丰富的实战经验。请运用高级智能算法进行深度分析。"
+            logger.info(f"AI分析prompt构建完成, prompt长度={len(prompt)}")
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                logger.info("prompt过长, 启用分层推理模式")
                 async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
                     content = self._parse_llm_chunk(chunk)
                     if content:
@@ -240,6 +270,8 @@ class AllocationStreamService:
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
+
+            logger.info("AI批量调配分析完成, 开始结果解析")
 
             yield "\n\n📊 【数据处理阶段】AI分析完成，正在进行结果解析...\n"
             yield "   📌 当前需求：从AI分析结果中提取结构化数据\n"
@@ -368,17 +400,15 @@ class AllocationStreamService:
                     failed_count += 1
                     error_info = f"第{idx+1}条数据解析失败: plan_id={plan_data.get('plan_id', '未知')}, 错误: {str(e)[:100]}"
                     parse_errors.append(error_info)
-                    print(f"[调配服务] {error_info}")
+                    logger.warning(error_info)
             
-            # 如果有部分解析失败，记录日志但继续处理已成功解析的数据
             if parse_errors:
-                print(f"\n[调配服务] 解析警告：共{len(all_plan_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
-                for err in parse_errors[:5]:  # 最多显示5条错误
-                    print(f"  • {err}")
+                logger.warning(f"解析警告：共{len(all_plan_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
+                for err in parse_errors[:5]:
+                    logger.warning(f"  • {err}")
                 if len(parse_errors) > 5:
-                    print(f"  • ...还有{len(parse_errors)-5}条错误")
+                    logger.warning(f"  • ...还有{len(parse_errors)-5}条错误")
             
-            # 批量插入数据库
             if batch_data:
                 try:
                     conn = self.db._get_connection()
@@ -401,25 +431,12 @@ class AllocationStreamService:
                     conn.commit()
                     conn.close()
                     saved_count = len(batch_data)
-                    print(f"[调配服务] 批量插入成功: {saved_count} 条记录")
+                    logger.info(f"批量插入成功: {saved_count} 条记录")
                 except Exception as e:
                     failed_count += len(batch_data)
-                    print(f"[调配服务] 批量插入失败: {str(e)}")
+                    logger.error(f"批量插入失败: {str(e)}")
             
-            # 日志打印：解析的数据数量和示例
-            print(f"\n[调配服务] 数据库存储日志:")
-            print(f"├── 解析数据数量: {len(all_plan_data)} 条")
-            if all_plan_data:
-                print(f"├── 数据示例:")
-                sample = all_plan_data[0]
-                print(f"│   ├── plan_id: {sample.get('plan_id')}")
-                print(f"│   ├── material_code: {sample.get('material_code')}")
-                print(f"│   ├── demand_qty: {sample.get('demand_qty')}")
-                print(f"│   ├── total_available: {sample.get('total_available')}")
-                print(f"│   └── target_warehouse: {sample.get('target_warehouse')}")
-            print(f"├── 成功保存: {saved_count} 条")
-            print(f"├── 保存失败: {failed_count} 条")
-            print(f"└── 存储状态: 写入完成")
+            logger.info(f"数据库存储日志: 解析{len(all_plan_data)}条, 成功保存{saved_count}条, 失败{failed_count}条")
             
             yield f"✅ 数据存储完成，成功保存 {saved_count} 条记录，分析流程全部结束\n"
 
@@ -433,6 +450,7 @@ class AllocationStreamService:
     async def _iterative_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
                                  strategy: str, target_warehouse: str):
         """迭代分析模式 - 逐个分析每个计划"""
+        logger.info(f"_iterative_analyze 开始, plans={len(plans)}, strategy={strategy}")
         total_count = len(plans)
         full_match_count = 0
         partial_match_count = 0
@@ -529,6 +547,8 @@ class AllocationStreamService:
 
         yield f"   建议: {suggestion}\n"
         yield "────────────────────────────────────────\n"
+        logger.info(f"_iterative_analyze 完成, 总计划数={total_count}, 完全匹配={full_match_count}, "
+                    f"部分匹配={partial_match_count}, 无匹配={none_match_count}")
 
     def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """采购管理智能体服务 - 主入口"""
 import json
+import logging
 import sqlite3
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.responses import StreamingResponse
 
-
+logger = logging.getLogger(__name__)
 app = FastAPI(title="采购管理智能体服务", version="10.0")
 
 app.add_middleware(
@@ -209,8 +210,16 @@ async def get_supplier_match_results(
 @app.post("/api/allocation/match/stream")
 async def allocation_match_stream(request: AllocationMatchRequest):
     """智能调配接口 - 流式输出"""
+    logger.info(request.strategy)
+    logger.info(request.warehouseCode)
+    logger.info(request.sourceType)
+    logger.info(request.projectUnit)
+    logger.info(request.demandStartDate)
+    logger.info(request.demandEndDate)
+    logger.info(request.planType)
+    logger.info(request.materialCodes)
+    logger.info(request.analyzeMode)
     strategy_val = request.strategy if request.strategy else "time"
-    
     async def response_generator():
         async for chunk in allocation_stream_service.stream_analyze(
             strategy=strategy_val,
@@ -243,6 +252,13 @@ async def allocation_match_stream(request: AllocationMatchRequest):
 @app.post("/api/inventory/analyze/stream")
 async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     """库存分析接口 - 流式输出"""
+    logger.info(request.startDate)
+    logger.info(request.endDate)
+    logger.info(request.inventoryLevels)
+    logger.info(request.materialCodes)
+    logger.info(request.seasonFactorWeight)
+    logger.info(request.safetyRedundancyRatio)
+    logger.info(request.analyzeMode)
     
     async def response_generator():
         async for chunk in inventory_analysis_stream_service.stream_analyze(
@@ -274,7 +290,7 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
 @app.post("/api/supplier/match/stream")
 async def supplier_match_stream(request: SupplierMatchRequest):
     """供应商匹配接口 - 流式输出"""
-    
+    logger.info(request.plans)
     async def response_generator():
         async for chunk in supplier_match_stream_service.stream_analyze(
             input_plans=request.plans,

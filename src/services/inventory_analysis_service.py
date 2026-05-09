@@ -794,26 +794,12 @@ class InventoryAnalysisService:
 
     async def _get_tech_ids_by_warehouse_material(self, warehouse_code: str, material_code: str,
                                                    start_date: str = None, end_date: str = None) -> List[str]:
-        """查询仓库+物料组合在历史出库表中有哪些技术规范书ID
-        
-        数据来源: mt_historical_outbound
-        目的: 只分析有历史出库数据的仓库+物料+tech_id组合，避免无效分析
-        
-        Args:
-            warehouse_code: 仓库编码
-            material_code: 物料编码
-            start_date: 开始月份（可选，格式YYYYMM）
-            end_date: 结束月份（可选，格式YYYYMM）
-        
-        返回:
-            tech_id列表
-        """
         tech_ids = []
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
 
-            # 转换日期格式：从 YYYYMM 转换为 YYYY-MM
             start_month = None
             end_month = None
             if start_date and len(start_date) == 6:
@@ -845,23 +831,17 @@ class InventoryAnalysisService:
                 if tech_id:
                     tech_ids.append(tech_id)
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"[InventoryAnalysisService] 查询tech_id失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return tech_ids
 
     async def _get_all_material_codes(self) -> List[str]:
-        """从历史出库表中获取所有物料编码
-        
-        数据来源: mt_historical_outbound
-        用途: 当用户未指定物料编码时，获取全量物料列表
-        
-        返回:
-            物料编码列表
-        """
         material_codes = []
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -873,10 +853,11 @@ class InventoryAnalysisService:
                 if row['fd_material_code']:
                     material_codes.append(str(row['fd_material_code']))
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"[InventoryAnalysisService] 获取所有物料编码失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return material_codes
 
@@ -895,6 +876,7 @@ class InventoryAnalysisService:
             库存数据列表，包含当前库存和在途库存
         """
         stocks = []
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -933,10 +915,11 @@ class InventoryAnalysisService:
                     "in_transit_stock": row['in_transit_stock'] or 0
                 })
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"[InventoryAnalysisService] 获取当前库存失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return stocks
 
@@ -958,11 +941,11 @@ class InventoryAnalysisService:
             历史出库数据列表，按过账月份降序排列
         """
         outbound_data = []
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
 
-            # 转换日期格式：从 YYYYMM 转换为 YYYY-MM
             start_month = None
             end_month = None
             if start_date and len(start_date) == 6:
@@ -999,10 +982,11 @@ class InventoryAnalysisService:
                     "outbound_count": row['fd_outbound_count'] or 0
                 })
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"[InventoryAnalysisService] 获取历史出库数据失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return outbound_data
 
@@ -1103,8 +1087,8 @@ class InventoryAnalysisService:
         return stats
 
     async def _get_warehouse_info_by_levels(self, inventory_levels: Optional[List[str]] = None) -> Dict[str, Dict[str, str]]:
-        """根据库存层级获取仓库信息"""
         warehouse_info = {}
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -1132,10 +1116,11 @@ class InventoryAnalysisService:
                         'level': row['fd_stock_level'] or ''
                     }
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"[InventoryAnalysisService] 获取仓库信息失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return warehouse_info
 

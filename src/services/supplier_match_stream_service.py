@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """供应商匹配服务 - 流式版本（复用原服务逻辑）"""
+import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from ..services.supplier_match_service import SupplierMatchService
 from ..services.context_manager import ContextManager
@@ -36,6 +40,9 @@ class SupplierMatchStreamService:
         yield "   为每个补货计划精准匹配最优供应商，实现采购成本最小化和供应链效率最大化。\n"
         yield "   核心目标：优化供应商结构、降低采购成本、保障供应稳定性。\n\n"
         
+        logger.info(f"开始流式供应商匹配分析, input_plans_count={len(input_plans) if input_plans else 0}, "
+                    f"analyze_mode={analyze_mode}")
+        
         try:
             yield "🔍 【阶段一：补货计划数据采集】\n"
             yield "   📌 当前需求：获取需要进行供应商匹配的补货计划\n"
@@ -52,13 +59,20 @@ class SupplierMatchStreamService:
                 yield f"   └─ 共获取 {len(plans)} 条输入计划\n"
                 yield f"   └─ 数据完整性：已验证所有必需字段\n"
                 yield f"   └─ 下一步：查询供应商协议数据\n\n"
+                logger.info(f"使用外部输入计划, count={len(plans)}")
             else:
                 yield "   └─ 数据来源：从数据库智能检索补货计划\n"
-                plans = await self._service._query_plans()
-                yield f"✅ 补货计划数据采集成功\n"
-                yield f"   └─ 已从数据库获取 {len(plans)} 条补货计划\n"
-                yield f"   └─ 数据完整性：已验证所有必需字段\n"
-                yield f"   └─ 下一步：查询供应商协议数据\n\n"
+                logger.info("正在从数据库查询补货计划...")
+                try:
+                    plans = await asyncio.wait_for(
+                        self._service._query_plans(),
+                        timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    yield "❌ 补货计划查询超时：数据库响应超过30秒\n"
+                    yield "   💡 建议：请检查数据库连接状态\n"
+                    return
+                logger.info(f"从数据库获取补货计划, count={len(plans)}")
 
             if not plans:
                 yield "❌ 补货计划数据采集失败：未查询到补货计划\n"
@@ -76,6 +90,7 @@ class SupplierMatchStreamService:
                 yield "   📌 技术架构：多目标优化 + 规则引擎 + 决策树\n"
                 yield "   └─ 正在启动AI匹配引擎...\n"
                 yield "   └─ 预计分析时间：取决于计划数量和供应商数据规模\n\n"
+                logger.info(f"启动批量供应商匹配, plans={len(plans)}")
                 async for chunk in self._batch_analyze(plans):
                     yield chunk
             else:
@@ -84,6 +99,7 @@ class SupplierMatchStreamService:
                 yield "   📌 执行动作：启动迭代匹配模式，逐个处理计划\n"
                 yield "   📌 匹配特点：适合计划数量较大或需要实时反馈的场景\n"
                 yield "   └─ 正在启动迭代匹配...\n\n"
+                logger.info(f"启动迭代供应商匹配, plans={len(plans)}")
                 async for chunk in self._iterative_analyze(plans):
                     yield chunk
 
@@ -96,6 +112,7 @@ class SupplierMatchStreamService:
 
     async def _batch_analyze(self, plans: List[Dict[str, Any]]):
         """批量分析模式 - 一次性分析所有计划"""
+        logger.info(f"_batch_analyze 开始, plans={len(plans)}")
         try:
             all_plan_data = []
             all_suppliers = []
@@ -122,10 +139,32 @@ class SupplierMatchStreamService:
 
                 material_desc = plan.get('materialDesc', '') or plan.get('fd_desc', '')
                 if not material_desc:
-                    material_desc = await self._service._get_material_desc_from_stock(material_code, tech_id)
+                    try:
+                        material_desc = await asyncio.wait_for(
+                            self._service._get_material_desc_from_stock(material_code, tech_id),
+                            timeout=20
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"获取物料描述超时, material_code={material_code}")
+                        material_desc = ''
 
-                company = await self._service._get_company_from_warehouse(warehouse_code)
-                suppliers = await self._service._get_protocol_suppliers(plan)
+                try:
+                    company = await asyncio.wait_for(
+                        self._service._get_company_from_warehouse(warehouse_code),
+                        timeout=20
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"获取所属单位超时, warehouse_code={warehouse_code}")
+                    company = ''
+
+                try:
+                    suppliers = await asyncio.wait_for(
+                        self._service._get_protocol_suppliers(plan),
+                        timeout=20
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"查询协议供应商超时, plan_id={plan_id}")
+                    suppliers = []
 
                 plan_data = {
                     'plan_id': plan_id,
@@ -167,9 +206,12 @@ class SupplierMatchStreamService:
 
             prompt = self._build_batch_prompt(all_plan_data, all_suppliers)
             system_prompt = "你是一位资深的电力物料智能采购供应商匹配专家，具备卓越的供应链分析能力和丰富的供应商管理实战经验。请运用高级智能算法进行深度分析。"
+            logger.info(f"AI匹配prompt构建完成, prompt长度={len(prompt)}, "
+                        f"有供应商计划数={sum(1 for p in all_plan_data if p['suppliers'])}")
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                logger.info("prompt过长, 启用分层推理模式")
                 async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
                     content = self._parse_llm_chunk(chunk)
                     if content:
@@ -189,6 +231,7 @@ class SupplierMatchStreamService:
             yield "      • 数据存储：JSON数据用于数据库存储\n"
             yield "      • 后续处理：支持数据导出和二次分析\n"
             yield "   └─ 正在执行结果解析...\n\n"
+            logger.info("AI批量供应商匹配分析完成, 开始结果解析")
 
             matched_count = sum(1 for p in all_plan_data if p['suppliers'])
             yield "📊 智能供应商匹配汇总报告\n"
@@ -325,20 +368,18 @@ class SupplierMatchStreamService:
                                 '', '', 0, 0, 0, 0, 0
                             ))
                 except Exception as e:
-                    failed_count += 3  # 每个计划有3种策略
+                    failed_count += 3
                     error_info = f"第{idx+1}条数据解析失败: plan_id={plan_data.get('plan_id', '未知')}, 错误: {str(e)[:100]}"
                     parse_errors.append(error_info)
-                    print(f"[供应商匹配服务] {error_info}")
+                    logger.warning(error_info)
             
-            # 如果有部分解析失败，记录日志但继续处理已成功解析的数据
             if parse_errors:
-                print(f"\n[供应商匹配服务] 解析警告：共{len(all_plan_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
+                logger.warning(f"解析警告：共{len(all_plan_data)}条数据，{len(parse_errors)}条解析失败，{len(batch_data)}条成功")
                 for err in parse_errors[:5]:
-                    print(f"  • {err}")
+                    logger.warning(f"  • {err}")
                 if len(parse_errors) > 5:
-                    print(f"  • ...还有{len(parse_errors)-5}条错误")
+                    logger.warning(f"  • ...还有{len(parse_errors)-5}条错误")
             
-            # 批量插入数据库
             if batch_data:
                 try:
                     conn = self.db._get_connection()
@@ -359,25 +400,12 @@ class SupplierMatchStreamService:
                     conn.commit()
                     conn.close()
                     saved_count = len(batch_data)
-                    print(f"[供应商匹配服务] 批量插入成功: {saved_count} 条记录")
+                    logger.info(f"批量插入成功: {saved_count} 条记录")
                 except Exception as e:
                     failed_count += len(batch_data)
-                    print(f"[供应商匹配服务] 批量插入失败: {str(e)}")
+                    logger.error(f"批量插入失败: {str(e)}")
             
-            # 日志打印：解析的数据数量和示例
-            print(f"\n[供应商匹配服务] 数据库存储日志:")
-            print(f"├── 解析数据数量: {len(all_plan_data)} 条")
-            if all_plan_data:
-                print(f"├── 数据示例:")
-                sample = all_plan_data[0]
-                print(f"│   ├── plan_id: {sample.get('plan_id')}")
-                print(f"│   ├── material_code: {sample.get('material_code')}")
-                print(f"│   ├── demand_qty: {sample.get('demand_qty')}")
-                print(f"│   ├── warehouse_code: {sample.get('warehouse_code')}")
-                print(f"│   └── supplier_count: {len(sample.get('suppliers', []))}")
-            print(f"├── 成功保存: {saved_count} 条")
-            print(f"├── 保存失败: {failed_count} 条")
-            print(f"└── 存储状态: 写入完成")
+            logger.info(f"数据库存储日志: 解析{len(all_plan_data)}条, 成功保存{saved_count}条, 失败{failed_count}条")
             
             yield f"✅ 数据存储完成，成功保存 {saved_count} 条记录（每个计划3种策略），分析流程全部结束\n"
 
@@ -390,6 +418,7 @@ class SupplierMatchStreamService:
 
     async def _iterative_analyze(self, plans: List[Dict[str, Any]]):
         """迭代分析模式 - 逐个分析每个计划"""
+        logger.info(f"_iterative_analyze 开始, plans={len(plans)}")
         total_count = len(plans)
         matched_count = 0
         unmatched_count = 0
@@ -414,15 +443,36 @@ class SupplierMatchStreamService:
                 yield "🔍 [子步骤 1/3] 获取物料描述...\n"
                 material_desc = plan.get('materialDesc', '') or plan.get('fd_desc', '')
                 if not material_desc:
-                    material_desc = await self._service._get_material_desc_from_stock(material_code, tech_id)
+                    try:
+                        material_desc = await asyncio.wait_for(
+                            self._service._get_material_desc_from_stock(material_code, tech_id),
+                            timeout=20
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"获取物料描述超时, material_code={material_code}, plan_id={plan_id}")
+                        material_desc = ''
                 yield f"✅ [子步骤 1/3] 物料描述: {material_desc or '未获取到'}\n"
 
                 yield "🔍 [子步骤 2/3] 获取所属单位...\n"
-                company = await self._service._get_company_from_warehouse(warehouse_code)
+                try:
+                    company = await asyncio.wait_for(
+                        self._service._get_company_from_warehouse(warehouse_code),
+                        timeout=20
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"获取所属单位超时, warehouse_code={warehouse_code}, plan_id={plan_id}")
+                    company = ''
                 yield f"✅ [子步骤 2/3] 所属单位: {company or '未获取到'}\n"
 
                 yield "🔍 [子步骤 3/3] 查询协议商库存...\n"
-                suppliers = await self._service._get_protocol_suppliers(plan)
+                try:
+                    suppliers = await asyncio.wait_for(
+                        self._service._get_protocol_suppliers(plan),
+                        timeout=20
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"查询协议供应商超时, plan_id={plan_id}")
+                    suppliers = []
 
                 if suppliers:
                     yield f"✅ [子步骤 3/3] 找到 {len(suppliers)} 个协议供应商\n"
@@ -455,9 +505,11 @@ class SupplierMatchStreamService:
 
                 status = '有匹配' if suppliers else '无匹配'
                 yield f"\n✅ [处理完成] 供应商匹配状态: {status}\n"
+                logger.info(f"计划 {plan_id} 迭代分析完成, 状态={status}")
 
             except Exception as e:
                 yield f"\n❌ [处理失败] {str(e)}\n"
+                logger.warning(f"计划 {plan_id} 迭代分析失败: {str(e)}")
                 unmatched_count += 1
 
             yield "\n────────────────────────────────────────\n\n"
@@ -468,6 +520,7 @@ class SupplierMatchStreamService:
         yield f"   有供应商匹配: {matched_count}\n"
         yield f"   无供应商匹配: {unmatched_count}\n"
         yield "────────────────────────────────────────\n"
+        logger.info(f"_iterative_analyze 完成, 总计划数={total_count}, 有匹配={matched_count}, 无匹配={unmatched_count}")
 
     def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
