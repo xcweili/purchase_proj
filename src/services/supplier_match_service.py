@@ -129,57 +129,45 @@ class SupplierMatchService:
         }
 
     async def _query_plans(self) -> List[Dict[str, Any]]:
-        """从补货计划表查询所有未删除的计划
-        
-        数据来源: mt_replenishment_plan
-        筛选条件: fd_deleted = 0
-        
-        返回:
-            补货计划列表
-        """
-        conn = self.db._get_connection()
-        cur = conn.cursor()
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
 
-        cur.execute('''
-            SELECT id, fd_material_no, fd_material_desc, fd_purchase_qty,
-                   fd_purchase_unit, fd_warehouse_code, fd_spec_doc_id,
-                   fd_purchase_req_NO, fd_project_def
-            FROM mt_replenishment_plan
-            WHERE fd_deleted = 0
-            ORDER BY id
-        ''')
-        rows = cur.fetchall()
+            cur.execute('''
+                SELECT id, fd_material_no, fd_material_desc, fd_purchase_qty,
+                       fd_purchase_unit, fd_warehouse_code, fd_spec_doc_id,
+                       fd_purchase_req_NO, fd_project_def
+                FROM mt_replenishment_plan
+                WHERE fd_deleted = 0
+                ORDER BY id
+                LIMIT 100
+            ''')
+            rows = cur.fetchall()
 
-        plans = []
-        for row in rows:
-            plans.append({
-                'planId': str(row['id']),
-                'materialCode': row['fd_material_no'] or '',
-                'materialDesc': row['fd_material_desc'] or '',
-                'demandQty': row['fd_purchase_qty'] or 0,
-                'unit': row['fd_purchase_unit'] or '',
-                'warehouseCode': row['fd_warehouse_code'] or '',
-                'techSpecId': row['fd_spec_doc_id'] or '',
-                'purchaseReqNo': row['fd_purchase_req_NO'] or '',
-                'projectDef': row['fd_project_def'] or '',
-            })
+            plans = []
+            for row in rows:
+                plans.append({
+                    'planId': str(row['id']),
+                    'materialCode': row['fd_material_no'] or '',
+                    'materialDesc': row['fd_material_desc'] or '',
+                    'demandQty': row['fd_purchase_qty'] or 0,
+                    'unit': row['fd_purchase_unit'] or '',
+                    'warehouseCode': row['fd_warehouse_code'] or '',
+                    'techSpecId': row['fd_spec_doc_id'] or '',
+                    'purchaseReqNo': row['fd_purchase_req_NO'] or '',
+                    'projectDef': row['fd_project_def'] or '',
+                })
 
-        conn.close()
-        return plans
+            return plans
+        except Exception as e:
+            logger.error(f"[SupplierMatchService] 查询补货计划失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
 
     async def _get_protocol_suppliers(self, plan: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """从协议商库存表查询指定物料的协议商信息
-        
-        数据来源: mt_protocol_stock
-        查询条件: fd_status = '有效' AND fd_material_code AND fd_tech_spec_id
-        必须同时使用物料编码和技术规范书ID进行查询（复合业务主键）
-        
-        Args:
-            plan: 补货计划数据（包含materialCode和techSpecId）
-        
-        返回:
-            协议商列表，包含供应商信息、库存数量、执行比例、单价等
-        """
         material_code = plan.get('materialCode', '')
         tech_spec_id = plan.get('techSpecId', '')
 
@@ -187,58 +175,54 @@ class SupplierMatchService:
             logger.warning(f"[SupplierMatchService] 物料编码或技术规范书ID为空，跳过查询: material_code={material_code}, tech_spec_id={tech_spec_id}")
             return []
 
-        conn = self.db._get_connection()
-        cur = conn.cursor()
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
 
-        query = '''
-            SELECT fd_protocol_no, fd_protocol_line, fd_mdm_supplier, fd_network_supplier,
-                   fd_supplier_desc, fd_material_code, fd_material_desc,
-                   fd_price_net, fd_net_price, fd_amount_net, fd_quantity, fd_remain_quantity,
-                   fd_execution_rate, fd_alloc_rate, fd_tech_spec_id
-            FROM mt_protocol_stock
-            WHERE fd_status = '有效'
-              AND fd_material_code = %s
-              AND fd_tech_spec_id = %s
-        '''
-        params = [material_code, tech_spec_id]
+            query = '''
+                SELECT fd_protocol_no, fd_protocol_line, fd_mdm_supplier, fd_network_supplier,
+                       fd_supplier_desc, fd_material_code, fd_material_desc,
+                       fd_price_net, fd_net_price, fd_amount_net, fd_quantity, fd_remain_quantity,
+                       fd_execution_rate, fd_alloc_rate, fd_tech_spec_id
+                FROM mt_protocol_stock
+                WHERE fd_status = '有效'
+                  AND fd_material_code = %s
+                  AND fd_tech_spec_id = %s
+            '''
+            params = [material_code, tech_spec_id]
 
-        cur.execute(query, params)
-        rows = cur.fetchall()
+            cur.execute(query, params)
+            rows = cur.fetchall()
 
-        suppliers = []
-        for row in rows:
-            suppliers.append({
-                'supplierCode': row['fd_mdm_supplier'] or row['fd_network_supplier'] or '',
-                'supplierName': row['fd_supplier_desc'] or '',
-                'materialCode': row['fd_material_code'] or '',
-                'materialDesc': row['fd_material_desc'] or '',
-                'protocolNo': row['fd_protocol_no'] or '',
-                'protocolLine': row['fd_protocol_line'] or '',
-                'unitPrice': float(row['fd_price_net'] or row['fd_net_price'] or 0),
-                'totalAmount': float(row['fd_amount_net'] or 0),
-                'totalQty': float(row['fd_quantity'] or 0),
-                'remainQty': float(row['fd_remain_quantity'] or 0),
-                'executionRate': float(row['fd_execution_rate'] or 0),
-                'allocRate': float(row['fd_alloc_rate'] or 0),
-                'techSpecId': row['fd_tech_spec_id'] or '',
-            })
+            suppliers = []
+            for row in rows:
+                suppliers.append({
+                    'supplierCode': row['fd_mdm_supplier'] or row['fd_network_supplier'] or '',
+                    'supplierName': row['fd_supplier_desc'] or '',
+                    'materialCode': row['fd_material_code'] or '',
+                    'materialDesc': row['fd_material_desc'] or '',
+                    'protocolNo': row['fd_protocol_no'] or '',
+                    'protocolLine': row['fd_protocol_line'] or '',
+                    'unitPrice': float(row['fd_price_net'] or row['fd_net_price'] or 0),
+                    'totalAmount': float(row['fd_amount_net'] or 0),
+                    'totalQty': float(row['fd_quantity'] or 0),
+                    'remainQty': float(row['fd_remain_quantity'] or 0),
+                    'executionRate': float(row['fd_execution_rate'] or 0),
+                    'allocRate': float(row['fd_alloc_rate'] or 0),
+                    'techSpecId': row['fd_tech_spec_id'] or '',
+                })
 
-        conn.close()
-        return suppliers
+            return suppliers
+        except Exception as e:
+            logger.error(f"[SupplierMatchService] 查询协议供应商失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
 
     async def _get_material_desc_from_stock(self, material_code: str, tech_id: str = None) -> str:
-        """从库存信息表获取物料描述（作为备用数据源）
-        
-        数据来源: w_stock_info_0808
-        用途: 当计划中没有物料描述时，从库存表补充获取
-        
-        Args:
-            material_code: 物料编码
-            tech_id: 技术规范书ID（可选）
-        
-        返回:
-            物料描述字符串，未找到则返回空字符串
-        """
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -258,28 +242,20 @@ class SupplierMatchService:
 
             cur.execute(query, params)
             row = cur.fetchone()
-            conn.close()
 
             if row and row['material_desc']:
                 return row['material_desc']
 
         except Exception as e:
             logger.error(f"[SupplierMatchService] 获取物料描述失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return ''
 
     async def _get_company_from_warehouse(self, warehouse_code: str) -> str:
-        """从仓库基础信息表获取所属单位
-        
-        数据来源: mt_base_warehouse_info
-        返回格式: 优先使用"城市代码+区域库"格式，其次使用仓库名称
-        
-        Args:
-            warehouse_code: 仓库编码
-        
-        返回:
-            所属单位字符串，未找到则返回空字符串
-        """
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -291,7 +267,6 @@ class SupplierMatchService:
             ''', (warehouse_code,))
 
             row = cur.fetchone()
-            conn.close()
 
             if row:
                 city_code = row['fd_city_code'] or ''
@@ -304,6 +279,9 @@ class SupplierMatchService:
 
         except Exception as e:
             logger.error(f"[SupplierMatchService] 获取所属单位失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
         return ''
 
@@ -313,14 +291,8 @@ class SupplierMatchService:
         
         存储表: mt_supplier_match_result
         逻辑主键: fd_material_code + fd_tech_spec_id + fd_strategy（重复时覆盖）
-        
-        Args:
-            plan: 原始计划数据
-            strategy_name: 策略名称（balanced/cost/delivery）
-            strategy_result: 策略匹配结果
-            material_desc: 物料描述
-            company: 所属单位
         """
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -331,7 +303,6 @@ class SupplierMatchService:
 
             supplier_json = json.dumps(suppliers_list, ensure_ascii=False)
 
-            # 提取第一个供应商的信息（每个策略只用一个供应商）
             first_supplier = suppliers_list[0] if suppliers_list else {}
             supplier_code = first_supplier.get('supplierCode', '') if first_supplier else ''
             supplier_name = first_supplier.get('supplierName', '') if first_supplier else ''
@@ -376,12 +347,13 @@ class SupplierMatchService:
             ))
 
             conn.commit()
-            conn.close()
-
             logger.info(f"[SupplierMatchService] 保存匹配结果: {plan.get('materialCode')} - {strategy_name}")
 
         except Exception as e:
             logger.error(f"[SupplierMatchService] 保存匹配结果失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
     def _generate_strategy_results(self, plan: Dict[str, Any], suppliers: List[Dict[str, Any]]) -> Dict[str, Any]:
         """生成三种供应商匹配策略方案

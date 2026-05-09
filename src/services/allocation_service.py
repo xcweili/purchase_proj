@@ -157,65 +157,74 @@ class AllocationService:
         返回:
             计划数据列表
         """
-        conn = self.db._get_connection()
-        cur = conn.cursor()
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
 
-        query = "SELECT * FROM mt_stock_use_list_plan_two WHERE 1=1"
-        params = []
+            query = "SELECT * FROM mt_stock_use_list_plan_two WHERE 1=1"
+            params = []
 
-        if project_unit:
-            query += " AND (fd_unit_name = %s OR fd_unit_factory_code = %s)"
-            params.extend([project_unit, project_unit])
+            if project_unit:
+                query += " AND (fd_unit_name = %s OR fd_unit_factory_code = %s)"
+                params.extend([project_unit, project_unit])
 
-        if start_date:
-            query += " AND fd_requisition_date >= %s"
-            params.append(start_date)
+            if start_date:
+                query += " AND fd_requisition_date >= %s"
+                params.append(start_date)
 
-        if end_date:
-            query += " AND fd_requisition_date <= %s"
-            params.append(end_date)
+            if end_date:
+                query += " AND fd_requisition_date <= %s"
+                params.append(end_date)
 
-        if plan_type:
-            query += " AND apply_way = %s"
-            params.append(plan_type)
+            if plan_type:
+                query += " AND apply_way = %s"
+                params.append(plan_type)
 
-        query += " AND apply_way IN ('01', '05', '06')"
+            query += " AND apply_way IN ('01', '05', '06')"
 
-        if warehouse_code:
-            query += " AND fd_warehouse_code = %s"
-            params.append(warehouse_code)
+            if warehouse_code:
+                query += " AND fd_warehouse_code = %s"
+                params.append(warehouse_code)
 
-        if material_codes and len(material_codes) > 0:
-            placeholders = ','.join(['%s' for _ in material_codes])
-            query += f" AND fd_material_code IN ({placeholders})"
-            params.extend(material_codes)
+            if material_codes and len(material_codes) > 0:
+                placeholders = ','.join(['%s' for _ in material_codes])
+                query += f" AND fd_material_code IN ({placeholders})"
+                params.extend(material_codes)
 
-        cur.execute(query, params)
-        rows = cur.fetchall()
+            query += " LIMIT 100"
 
-        plans = []
-        for row in rows:
-            plans.append({
-                'planId': row['fd_plan_id'] or row['id'],
-                'planCode': row['fd_code_use'],
-                'materialCode': row['fd_material_code'],
-                'materialDesc': row['fd_desc'],
-                'techSpecId': row['fd_tech_spec_id'],
-                'demandQty': row['fd_requisition_num'] or 0,
-                'warehouseCode': row['fd_warehouse_code'],
-                'unit': row['fd_unit'],
-                'unitCode': row['fd_unit_code'],
-                'projectName': row['fd_project_name'],
-                'projectCode': row['fd_project_code'],
-                'unitName': row['fd_unit_name'],
-                'unitFactoryCode': row['fd_unit_factory_code'],
-                'unitPrice': row['fd_unit_price'] or 0,
-                'demandDate': row['fd_requisition_date'],
-                'planType': row['apply_way']
-            })
+            cur.execute(query, params)
+            rows = cur.fetchall()
 
-        conn.close()
-        return plans
+            plans = []
+            for row in rows:
+                plans.append({
+                    'planId': row['fd_plan_id'] or row['id'],
+                    'planCode': row['fd_code_use'],
+                    'materialCode': row['fd_material_code'],
+                    'materialDesc': row['fd_desc'],
+                    'techSpecId': row['fd_tech_spec_id'],
+                    'demandQty': row['fd_requisition_num'] or 0,
+                    'warehouseCode': row['fd_warehouse_code'],
+                    'unit': row['fd_unit'],
+                    'unitCode': row['fd_unit_code'],
+                    'projectName': row['fd_project_name'],
+                    'projectCode': row['fd_project_code'],
+                    'unitName': row['fd_unit_name'],
+                    'unitFactoryCode': row['fd_unit_factory_code'],
+                    'unitPrice': row['fd_unit_price'] or 0,
+                    'demandDate': row['fd_requisition_date'],
+                    'planType': row['apply_way']
+                })
+
+            return plans
+        except Exception as e:
+            logger.error(f"[AllocationService] 查询需求计划失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
 
     def _query_stocks(self, material_codes: List[str], source_type: str, target_warehouse: str = '', tech_ids: List[str] = None) -> List[Dict[str, Any]]:
         """从库存信息表查询库存数据（按仓库+物料+技术规范书分组汇总）
@@ -235,87 +244,92 @@ class AllocationService:
         返回:
             库存数据列表，每个仓库+物料+技术规范书只有一条记录
         """
-        conn = self.db._get_connection()
-        cur = conn.cursor()
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
 
-        # 构建查询条件
-        where_clauses = ["1=1"]
-        params = []
+            where_clauses = ["1=1"]
+            params = []
 
-        if material_codes and len(material_codes) > 0:
-            placeholders = ','.join(['%s' for _ in material_codes])
-            where_clauses.append(f"material_code IN ({placeholders})")
-            params.extend(material_codes)
+            if material_codes and len(material_codes) > 0:
+                placeholders = ','.join(['%s' for _ in material_codes])
+                where_clauses.append(f"material_code IN ({placeholders})")
+                params.extend(material_codes)
 
-        if tech_ids and len(tech_ids) > 0:
-            placeholders = ','.join(['%s' for _ in tech_ids])
-            where_clauses.append(f"tech_id IN ({placeholders})")
-            params.extend(tech_ids)
+            if tech_ids and len(tech_ids) > 0:
+                placeholders = ','.join(['%s' for _ in tech_ids])
+                where_clauses.append(f"tech_id IN ({placeholders})")
+                params.extend(tech_ids)
 
-        if source_type:
-            where_clauses.append("source_type = %s")
-            params.append(source_type)
+            if source_type:
+                where_clauses.append("source_type = %s")
+                params.append(source_type)
 
-        where_clause = " AND ".join(where_clauses)
+            where_clause = " AND ".join(where_clauses)
 
-        # 按 loc_code + material_code + tech_id 分组汇总
-        query = f"""
-            SELECT 
-                material_code,
-                MAX(material_desc) as material_desc,
-                tech_id,
-                loc_code,
-                MAX(loc_name) as loc_name,
-                SUM(stock_qty) as stock_qty,
-                MAX(unit_price) as unit_price,
-                GROUP_CONCAT(DISTINCT source_type ORDER BY source_type SEPARATOR '/') as source_type,
-                GROUP_CONCAT(DISTINCT factory_name ORDER BY factory_name SEPARATOR '/') as factory_name
-            FROM w_stock_info_0808
-            WHERE {where_clause}
-            GROUP BY loc_code, material_code, tech_id
-        """
+            query = f"""
+                SELECT 
+                    material_code,
+                    MAX(material_desc) as material_desc,
+                    tech_id,
+                    loc_code,
+                    MAX(loc_name) as loc_name,
+                    SUM(stock_qty) as stock_qty,
+                    MAX(unit_price) as unit_price,
+                    GROUP_CONCAT(DISTINCT source_type ORDER BY source_type SEPARATOR '/') as source_type,
+                    GROUP_CONCAT(DISTINCT factory_name ORDER BY factory_name SEPARATOR '/') as factory_name
+                FROM w_stock_info_0808
+                WHERE {where_clause}
+                GROUP BY loc_code, material_code, tech_id
+                LIMIT 500
+            """
 
-        cur.execute(query, params)
-        rows = cur.fetchall()
+            cur.execute(query, params)
+            rows = cur.fetchall()
 
-        # 查询仓库距离信息（仅当有目标仓库时）
-        warehouse_distances = {}
-        if target_warehouse:
-            try:
-                cur.execute("""
-                    SELECT fd_source_warehouse_code, fd_target_warehouse_code, fd_distance
-                    FROM mt_warehouse_distance
-                    WHERE fd_target_warehouse_code = %s
-                """, (target_warehouse,))
-                distance_rows = cur.fetchall()
-                for drow in distance_rows:
-                    src_wh = drow.get('fd_source_warehouse_code', '')
-                    distance = drow.get('fd_distance', 0) or 0
-                    if isinstance(distance, Decimal):
-                        distance = float(distance)
-                    warehouse_distances[src_wh] = distance
-                logger.info(f"[AllocationService] 获取到仓库距离: {warehouse_distances}")
-            except Exception as e:
-                logger.warning(f"[AllocationService] 查询仓库距离失败: {e}")
+            warehouse_distances = {}
+            if target_warehouse:
+                try:
+                    cur.execute("""
+                        SELECT fd_source_warehouse_code, fd_target_warehouse_code, fd_distance
+                        FROM mt_warehouse_distance
+                        WHERE fd_target_warehouse_code = %s
+                    """, (target_warehouse,))
+                    distance_rows = cur.fetchall()
+                    for drow in distance_rows:
+                        src_wh = drow.get('fd_source_warehouse_code', '')
+                        distance = drow.get('fd_distance', 0) or 0
+                        if isinstance(distance, Decimal):
+                            distance = float(distance)
+                        warehouse_distances[src_wh] = distance
+                    logger.info(f"[AllocationService] 获取到仓库距离: {warehouse_distances}")
+                except Exception as e:
+                    logger.warning(f"[AllocationService] 查询仓库距离失败: {e}")
 
-        stocks = []
-        for row in rows:
-            loc_code = row['loc_code']
-            stocks.append({
-                'material_code': row['material_code'],
-                'material_desc': row['material_desc'],
-                'tech_id': row['tech_id'],
-                'loc_code': loc_code,
-                'loc_name': row['loc_name'],
-                'stock_qty': float(row['stock_qty'] or 0),
-                'unit_price': float(row['unit_price'] or 0) if row['unit_price'] else 0,
-                'source_type': row['source_type'] or '',
-                'factory_name': row['factory_name'] or '',
-                'distance': warehouse_distances.get(loc_code)
-            })
+            stocks = []
+            for row in rows:
+                loc_code = row['loc_code']
+                stocks.append({
+                    'material_code': row['material_code'],
+                    'material_desc': row['material_desc'],
+                    'tech_id': row['tech_id'],
+                    'loc_code': loc_code,
+                    'loc_name': row['loc_name'],
+                    'stock_qty': float(row['stock_qty'] or 0),
+                    'unit_price': float(row['unit_price'] or 0) if row['unit_price'] else 0,
+                    'source_type': row['source_type'] or '',
+                    'factory_name': row['factory_name'] or '',
+                    'distance': warehouse_distances.get(loc_code)
+                })
 
-        conn.close()
-        return stocks
+            return stocks
+        except Exception as e:
+            logger.error(f"[AllocationService] 查询库存失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
 
     def _build_material_source_type_map(self, stocks: List[Dict[str, Any]]) -> Dict[str, str]:
         """构建物料编码到库存类型的映射
@@ -683,6 +697,7 @@ class AllocationService:
             demand_end_date: 需求结束日期
             plan_type: 计划类型
         """
+        conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
@@ -740,14 +755,14 @@ class AllocationService:
             ))
 
             conn.commit()
-            conn.close()
-
             logger.info(f"[AllocationService] 保存调配结果: planId={plan_id}, materialCode={material_code}, "
-                        f"status={match_status}, allocationType={allocation_type}, "
-                        f"unitFactoryCode={unit_factory_code}, amount={amount}, unitPrice={unit_price}")
+                        f"status={match_status}, allocationType={allocation_type}")
 
         except Exception as e:
             logger.error(f"[AllocationService] 保存调配结果失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
     def _update_stock_after_match(self, filtered_stocks: List[Dict[str, Any]],
                                    result: Dict[str, Any], material_code: str):
