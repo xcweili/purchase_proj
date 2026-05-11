@@ -8,8 +8,8 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.context_manager import ContextManager
-from ..services.session_manager import session_manager
+from ..utils.context_manager import ContextManager
+from ..utils.session_manager import session_manager
 
 
 class AllocationStreamService:
@@ -288,9 +288,9 @@ class AllocationStreamService:
             cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
-                yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
                 logger.info("prompt过长, 启用分层推理模式")
-                async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'allocation', {'plans': all_plan_data, 'stocks': stocks, 'strategy': strategy}):
                     # 检查会话是否已取消
                     if session_id and session_manager.is_session_cancelled(session_id):
                         yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
@@ -548,8 +548,8 @@ class AllocationStreamService:
                 cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
                 if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
-                    async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'allocation', {'plans': all_plan_data, 'stocks': stocks, 'strategy': strategy}):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content

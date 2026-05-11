@@ -8,8 +8,8 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.context_manager import ContextManager
-from ..services.session_manager import session_manager
+from ..utils.context_manager import ContextManager
+from ..utils.session_manager import session_manager
 
 
 class SupplierMatchStreamService:
@@ -149,7 +149,6 @@ class SupplierMatchStreamService:
                 material_code = plan.get('materialCode', '')
                 tech_id = plan.get('techSpecId', '')
                 demand_qty = float(plan.get('demandQty', 0) or 0)
-                warehouse_code = plan.get('warehouseCode', '')
 
                 material_desc = plan.get('materialDesc', '') or plan.get('fd_desc', '')
                 if not material_desc:
@@ -162,14 +161,7 @@ class SupplierMatchStreamService:
                         logger.warning(f"获取物料描述超时, material_code={material_code}")
                         material_desc = ''
 
-                try:
-                    company = await asyncio.wait_for(
-                        self._get_company_from_warehouse(warehouse_code),
-                        timeout=20
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"获取所属单位超时, warehouse_code={warehouse_code}")
-                    company = ''
+                company = plan.get('company', '')
 
                 try:
                     suppliers = await asyncio.wait_for(
@@ -184,10 +176,12 @@ class SupplierMatchStreamService:
                     'plan_id': plan_id,
                     'material_code': material_code,
                     'tech_id': tech_id,
+                    'tech_spec_id': plan.get('techSpecId', '') or tech_id,
                     'demand_qty': demand_qty,
-                    'warehouse_code': warehouse_code,
                     'material_desc': material_desc or '',
                     'company': company or '',
+                    'project_def': plan.get('projectDef', ''),
+                    'project_desc': plan.get('projectDesc', ''),
                     'suppliers': suppliers
                 }
                 all_plan_data.append(plan_data)
@@ -232,9 +226,9 @@ class SupplierMatchStreamService:
             cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
-                yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
+                yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
                 logger.info("prompt过长, 启用分层推理模式")
-                async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'supplier', {'plans': all_plan_data, 'suppliers': all_suppliers}):
                     # 检查会话是否已取消
                     if session_id and session_manager.is_session_cancelled(session_id):
                         yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
@@ -294,6 +288,8 @@ class SupplierMatchStreamService:
             
             # 收集所有要插入的数据
             batch_data = []
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
             for idx, plan_data in enumerate(all_plan_data):
                 try:
                     # 从AI返回的结果中获取字段（优先级：AI结果 > 原始数据）
@@ -301,7 +297,9 @@ class SupplierMatchStreamService:
                     
                     suppliers = result_data.get('suppliers', []) or plan_data.get('suppliers', [])
                     material_desc = result_data.get('materialDesc', '') or plan_data.get('material_desc', '')
-                    company = plan_data.get('company', '')
+                    company = result_data.get('company', '') or plan_data.get('company', '')
+                    project_def = result_data.get('projectDef', '') or plan_data.get('projectDef', '') or plan_data.get('project_def', '')
+                    project_desc = result_data.get('projectDesc', '') or plan_data.get('projectDesc', '') or plan_data.get('project_desc', '')
                     
                     # 字段获取逻辑（与非流式保持一致）
                     plan_id = result_data.get('planId') or plan_data.get('planId') or plan_data.get('plan_id', '')
@@ -309,8 +307,7 @@ class SupplierMatchStreamService:
                     material_code = result_data.get('materialCode') or plan_data.get('materialCode') or plan_data.get('material_code', '')
                     demand_qty = result_data.get('demandQty', 0) or plan_data.get('demandQty', 0) or plan_data.get('demand_qty', 0)
                     unit_price = result_data.get('unitPrice', 0) or plan_data.get('unitPrice', 0) or plan_data.get('unit_price', 0) or 0
-                    warehouse_code = result_data.get('warehouseCode', '') or plan_data.get('warehouseCode', '') or plan_data.get('warehouse_code', '')
-                    tech_spec_id = result_data.get('techSpecId', '') or plan_data.get('techSpecId', '') or plan_data.get('tech_spec_id', '')
+                    tech_spec_id = result_data.get('techSpecId', '') or plan_data.get('techSpecId', '') or plan_data.get('tech_spec_id', '') or plan_data.get('fd_spec_doc_id', '')
                     amount = result_data.get('amount', 0) or (demand_qty * unit_price)
                     
                     if suppliers:
@@ -321,6 +318,12 @@ class SupplierMatchStreamService:
                         balanced_allocated = sum(float(s.get('remainQty', 0) or 0) for s in balanced_suppliers)
                         balanced_unmet = max(0, demand_qty - balanced_allocated)
                         balanced_supplier_names = ','.join([s.get('supplierName', '') for s in balanced_suppliers])
+                        # 计算第一条供应商的成本
+                        balanced_first_unit_price = float(balanced_suppliers[0].get('unitPrice', 0) or 0) if balanced_suppliers else 0
+                        balanced_first_allocated = float(balanced_suppliers[0].get('remainQty', 0) or 0) if balanced_suppliers else 0
+                        balanced_first_cost = balanced_first_unit_price * balanced_first_allocated
+                        # 判断匹配状态
+                        balanced_status = '成功' if balanced_unmet == 0 else '部分匹配'
                         
                         # 2. 成本策略：优先选择单价最低的供应商
                         cost_suppliers = sorted(suppliers, key=lambda x: float(x.get('unitPrice', 0) or float('inf')))[:3]
@@ -328,6 +331,12 @@ class SupplierMatchStreamService:
                         cost_allocated = sum(float(s.get('remainQty', 0) or 0) for s in cost_suppliers)
                         cost_unmet = max(0, demand_qty - cost_allocated)
                         cost_supplier_names = ','.join([s.get('supplierName', '') for s in cost_suppliers])
+                        # 计算第一条供应商的成本
+                        cost_first_unit_price = float(cost_suppliers[0].get('unitPrice', 0) or 0) if cost_suppliers else 0
+                        cost_first_allocated = float(cost_suppliers[0].get('remainQty', 0) or 0) if cost_suppliers else 0
+                        cost_first_cost = cost_first_unit_price * cost_first_allocated
+                        # 判断匹配状态
+                        cost_status = '成功' if cost_unmet == 0 else '部分匹配'
                         
                         # 3. 配送策略：优先选择能满足全部需求的单个供应商
                         delivery_suppliers = [s for s in suppliers if float(s.get('remainQty', 0) or 0) >= demand_qty]
@@ -337,48 +346,54 @@ class SupplierMatchStreamService:
                         delivery_allocated = sum(float(s.get('remainQty', 0) or 0) for s in delivery_suppliers)
                         delivery_unmet = max(0, demand_qty - delivery_allocated)
                         delivery_supplier_names = ','.join([s.get('supplierName', '') for s in delivery_suppliers])
+                        # 计算第一条供应商的成本
+                        delivery_first_unit_price = float(delivery_suppliers[0].get('unitPrice', 0) or 0) if delivery_suppliers else 0
+                        delivery_first_allocated = float(delivery_suppliers[0].get('remainQty', 0) or 0) if delivery_suppliers else 0
+                        delivery_first_cost = delivery_first_unit_price * delivery_first_allocated
+                        # 判断匹配状态
+                        delivery_status = '成功' if delivery_unmet == 0 else '部分匹配'
                         
                         # 添加三种策略的数据
                         batch_data.extend([
                             (
-                                material_code, material_desc, '成功', 'balanced',
-                                company, '', '',
-                                demand_qty, warehouse_code, tech_spec_id,
+                                plan_id, material_code, material_desc, balanced_status, 'balanced',
+                                company, project_def, project_desc,
+                                demand_qty, tech_spec_id,
                                 json.dumps(balanced_suppliers, ensure_ascii=False), balanced_total_cost, balanced_unmet,
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                current_time, current_time,
                                 balanced_suppliers[0].get('supplierCode', '') if balanced_suppliers else '',
                                 balanced_suppliers[0].get('supplierName', '') if balanced_suppliers else '',
                                 balanced_allocated,
-                                balanced_suppliers[0].get('unitPrice', 0) if balanced_suppliers else 0,
-                                balanced_suppliers[0].get('cost', 0) if balanced_suppliers else 0,
+                                balanced_first_unit_price,
+                                balanced_first_cost,
                                 float(balanced_suppliers[0].get('executionRate', 0) or 0) if balanced_suppliers else 0,
                                 float(balanced_suppliers[0].get('remainQty', 0) or 0) if balanced_suppliers else 0
                             ),
                             (
-                                material_code, material_desc, '成功', 'cost',
-                                company, '', '',
-                                demand_qty, warehouse_code, tech_spec_id,
+                                plan_id, material_code, material_desc, cost_status, 'cost',
+                                company, project_def, project_desc,
+                                demand_qty, tech_spec_id,
                                 json.dumps(cost_suppliers, ensure_ascii=False), cost_total_cost, cost_unmet,
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                current_time, current_time,
                                 cost_suppliers[0].get('supplierCode', '') if cost_suppliers else '',
                                 cost_suppliers[0].get('supplierName', '') if cost_suppliers else '',
                                 cost_allocated,
-                                cost_suppliers[0].get('unitPrice', 0) if cost_suppliers else 0,
-                                cost_suppliers[0].get('cost', 0) if cost_suppliers else 0,
+                                cost_first_unit_price,
+                                cost_first_cost,
                                 float(cost_suppliers[0].get('executionRate', 0) or 0) if cost_suppliers else 0,
                                 float(cost_suppliers[0].get('remainQty', 0) or 0) if cost_suppliers else 0
                             ),
                             (
-                                material_code, material_desc, '成功', 'delivery',
-                                company, '', '',
-                                demand_qty, warehouse_code, tech_spec_id,
+                                plan_id, material_code, material_desc, delivery_status, 'delivery',
+                                company, project_def, project_desc,
+                                demand_qty, tech_spec_id,
                                 json.dumps(delivery_suppliers, ensure_ascii=False), delivery_total_cost, delivery_unmet,
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                current_time, current_time,
                                 delivery_suppliers[0].get('supplierCode', '') if delivery_suppliers else '',
                                 delivery_suppliers[0].get('supplierName', '') if delivery_suppliers else '',
                                 delivery_allocated,
-                                delivery_suppliers[0].get('unitPrice', 0) if delivery_suppliers else 0,
-                                delivery_suppliers[0].get('cost', 0) if delivery_suppliers else 0,
+                                delivery_first_unit_price,
+                                delivery_first_cost,
                                 float(delivery_suppliers[0].get('executionRate', 0) or 0) if delivery_suppliers else 0,
                                 float(delivery_suppliers[0].get('remainQty', 0) or 0) if delivery_suppliers else 0
                             )
@@ -387,11 +402,11 @@ class SupplierMatchStreamService:
                         # 无供应商时也保存记录
                         for strategy_code in ['balanced', 'cost', 'delivery']:
                             batch_data.append((
-                                material_code, material_desc, '失败', strategy_code,
-                                company, '', '',
-                                demand_qty, warehouse_code, tech_spec_id,
+                                plan_id, material_code, material_desc, '失败', strategy_code,
+                                company, project_def, project_desc,
+                                demand_qty, tech_spec_id,
                                 json.dumps([]), 0, demand_qty,
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                current_time, current_time,
                                 '', '', 0, 0, 0, 0, 0
                             ))
                 except Exception as e:
@@ -414,14 +429,14 @@ class SupplierMatchStreamService:
                     
                     cur.executemany('''
                         REPLACE INTO mt_supplier_match_result (
-                            fd_material_code, fd_material_desc, fd_match_status, fd_strategy,
+                            fd_plan_id, fd_material_code, fd_material_desc, fd_match_status, fd_strategy,
                             fd_company, fd_project_def, fd_project_desc,
-                            fd_demand_qty, fd_warehouse_code, fd_tech_spec_id,
+                            fd_demand_qty, fd_tech_spec_id,
                             fd_supplier_results, fd_total_cost, fd_unmet_demand,
-                            fd_create_time,
+                            fd_create_time, fd_update_time,
                             fd_supplier_code, fd_supplier_name, fd_allocated_qty,
                             fd_unit_price, fd_cost, fd_execution_rate, fd_remain_quantity
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ''', batch_data)
                     
                     conn.commit()
@@ -460,7 +475,7 @@ class SupplierMatchStreamService:
             material_code = plan.get('materialCode', '')
             tech_id = plan.get('techSpecId', '')
             demand_qty = float(plan.get('demandQty', 0) or 0)
-            warehouse_code = plan.get('warehouseCode', '')
+            company = plan.get('company', '')
 
             yield "\n📋 [处理 {idx}/{total_count}] 开始处理计划\n".format(idx=idx, total_count=total_count)
             yield "────────────────────────────────────────\n"
@@ -468,11 +483,10 @@ class SupplierMatchStreamService:
             yield f"   物料编码: {material_code}\n"
             yield f"   技术规范ID: {tech_id}\n"
             yield f"   需求数量: {demand_qty}\n"
-            yield f"   目标仓库: {warehouse_code}\n"
             yield "────────────────────────────────────────\n"
 
             try:
-                yield "🔍 [子步骤 1/3] 获取物料描述...\n"
+                yield "🔍 [子步骤 1/2] 获取物料描述...\n"
                 material_desc = plan.get('materialDesc', '') or plan.get('fd_desc', '')
                 if not material_desc:
                     try:
@@ -483,20 +497,9 @@ class SupplierMatchStreamService:
                     except asyncio.TimeoutError:
                         logger.warning(f"获取物料描述超时, material_code={material_code}, plan_id={plan_id}")
                         material_desc = ''
-                yield f"✅ [子步骤 1/3] 物料描述: {material_desc or '未获取到'}\n"
+                yield f"✅ [子步骤 1/2] 物料描述: {material_desc or '未获取到'}\n"
 
-                yield "🔍 [子步骤 2/3] 获取所属单位...\n"
-                try:
-                    company = await asyncio.wait_for(
-                        self._get_company_from_warehouse(warehouse_code),
-                        timeout=20
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"获取所属单位超时, warehouse_code={warehouse_code}, plan_id={plan_id}")
-                    company = ''
-                yield f"✅ [子步骤 2/3] 所属单位: {company or '未获取到'}\n"
-
-                yield "🔍 [子步骤 3/3] 查询协议商库存...\n"
+                yield "🔍 [子步骤 2/2] 查询协议商库存...\n"
                 try:
                     suppliers = await asyncio.wait_for(
                         self._get_protocol_suppliers(plan),
@@ -532,8 +535,8 @@ class SupplierMatchStreamService:
                 cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
                 if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
-                    async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'supplier', {'plans': all_plan_data, 'suppliers': all_suppliers}):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content
@@ -562,10 +565,30 @@ class SupplierMatchStreamService:
         yield "────────────────────────────────────────\n"
         logger.info(f"_iterative_analyze 完成, 总计划数={total_count}, 有匹配={matched_count}, 无匹配={unmatched_count}")
 
-    def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
-        """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
+    def _parse_llm_chunk(self, chunk) -> Optional[str]:
+        """解析LLM返回的chunk，提取内容和思考过程"""
         try:
-            data = json.loads(chunk)
+            # 如果chunk已经是列表或字典，直接使用
+            if isinstance(chunk, (list, dict)):
+                data = chunk
+            else:
+                # 尝试解析为JSON
+                data = json.loads(chunk)
+            
+            # 如果是列表，尝试提取第一个元素
+            if isinstance(data, list):
+                if len(data) > 0 and isinstance(data[0], dict):
+                    delta = data[0].get('delta', {})
+                    reasoning = delta.get('reasoning_content', '')
+                    content = delta.get('content', '')
+                    
+                    if reasoning:
+                        return f"{reasoning}"
+                    elif content:
+                        return content
+                return None
+            
+            # 如果是字典，按原有逻辑处理
             choices = data.get('choices', [])
             if choices:
                 delta = choices[0].get('delta', {})
@@ -577,7 +600,9 @@ class SupplierMatchStreamService:
                 elif content:
                     return content
         except json.JSONDecodeError:
-            return chunk.strip()
+            # 如果不是有效JSON，直接返回原始字符串
+            if isinstance(chunk, str):
+                return chunk.strip()
         return None
 
     def _build_batch_prompt(self, all_plan_data: List[Dict[str, Any]], all_suppliers: List[Dict[str, Any]]) -> str:
@@ -590,7 +615,6 @@ class SupplierMatchStreamService:
                 '物料描述': p['material_desc'],
                 '技术规范ID': p['tech_id'],
                 '需求数量': p['demand_qty'],
-                '目标仓库': p['warehouse_code'],
                 '所属单位': p['company']
             })
 
@@ -680,7 +704,6 @@ class SupplierMatchStreamService:
         material_code = plan.get('materialCode', '')
         demand_qty = float(plan.get('demandQty', 0) or 0)
         tech_id = plan.get('techSpecId', '')
-        warehouse_code = plan.get('warehouseCode', '')
 
         suppliers_formatted = []
         for s in suppliers[:10]:
@@ -704,7 +727,6 @@ class SupplierMatchStreamService:
 - 物料描述: {material_desc}
 - 技术规范ID: {tech_id}
 - 需求数量: {demand_qty}
-- 目标仓库: {warehouse_code}
 - 所属单位: {company}
 
 ## 协议供应商数据
@@ -753,9 +775,9 @@ class SupplierMatchStreamService:
             cur = conn.cursor()
 
             cur.execute('''
-                SELECT id, fd_material_no, fd_material_desc, fd_purchase_qty,
-                       fd_purchase_unit, fd_warehouse_code, fd_spec_doc_id,
-                       fd_purchase_req_NO, fd_project_def
+                SELECT id, fd_plan_id, fd_material_no, fd_material_desc, fd_purchase_qty,
+                       fd_purchase_unit, fd_spec_doc_id,
+                       fd_purchase_req_NO, fd_project_def, fd_project_desc, fd_unit
                 FROM mt_replenishment_plan
                 WHERE fd_deleted = 0
                 ORDER BY id
@@ -766,15 +788,16 @@ class SupplierMatchStreamService:
             plans = []
             for row in rows:
                 plans.append({
-                    'planId': str(row['id']),
+                    'planId': row['fd_plan_id'] or str(row['id']),
                     'materialCode': row['fd_material_no'] or '',
                     'materialDesc': row['fd_material_desc'] or '',
                     'demandQty': row['fd_purchase_qty'] or 0,
                     'unit': row['fd_purchase_unit'] or '',
-                    'warehouseCode': row['fd_warehouse_code'] or '',
                     'techSpecId': row['fd_spec_doc_id'] or '',
                     'purchaseReqNo': row['fd_purchase_req_NO'] or '',
                     'projectDef': row['fd_project_def'] or '',
+                    'projectDesc': row['fd_project_desc'] or '',
+                    'company': row['fd_unit'] or '',
                 })
 
             return plans
@@ -868,38 +891,6 @@ class SupplierMatchStreamService:
 
         except Exception as e:
             logger.error(f"[SupplierMatchStream] 获取物料描述失败: {str(e)}")
-        finally:
-            if conn:
-                conn.close()
-
-        return ''
-
-    async def _get_company_from_warehouse(self, warehouse_code: str) -> str:
-        """从仓库获取所属单位"""
-        conn = None
-        try:
-            conn = self.db._get_connection()
-            cur = conn.cursor()
-
-            cur.execute('''
-                SELECT fd_warehouse_name, fd_city_code
-                FROM mt_base_warehouse_info
-                WHERE fd_warehouse_code = %s
-            ''', (warehouse_code,))
-
-            row = cur.fetchone()
-
-            if row:
-                city_code = row['fd_city_code'] or ''
-                warehouse_name = row['fd_warehouse_name'] or ''
-
-                if city_code:
-                    return f"{city_code}区域库"
-                elif warehouse_name:
-                    return warehouse_name
-
-        except Exception as e:
-            logger.error(f"[SupplierMatchStream] 获取所属单位失败: {str(e)}")
         finally:
             if conn:
                 conn.close()

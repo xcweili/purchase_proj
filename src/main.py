@@ -26,7 +26,7 @@ app.add_middleware(
 # ============================================
 # 会话管理器导入
 # ============================================
-from .services.session_manager import session_manager
+from .utils.session_manager import session_manager
 
 # ============================================
 # 服务层导入

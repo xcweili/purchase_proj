@@ -9,8 +9,8 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.context_manager import ContextManager
-from ..services.session_manager import session_manager
+from ..utils.context_manager import ContextManager
+from ..utils.session_manager import session_manager
 
 
 class InventoryAnalysisStreamService:
@@ -83,17 +83,17 @@ class InventoryAnalysisStreamService:
 
             yield "🔍 【阶段二：物料数据采集】\n"
             yield "   📌 当前需求：获取需要分析的物料编码列表\n"
-            yield "   📌 执行动作：从物料主数据表提取有效物料编码\n"
+            yield "   📌 执行动作：从历史出库表提取指定仓库下有出库记录的物料编码\n"
             yield "   📌 数据用途：物料编码是库存分析的核心维度，用于关联库存和消耗数据\n"
             yield "   📌 数据来源：\n"
             yield "      • 外部输入：用户指定的物料编码列表\n"
-            yield "      • 全量数据：从物料主数据表获取所有物料编码\n"
+            yield "      • 关联数据：从历史出库表获取指定仓库下有出库记录的物料\n"
             yield "   └─ 正在执行物料数据检索...\n"
             logger.info("正在执行物料数据检索...")
             if not material_codes or len(material_codes) == 0:
                 try:
                     material_codes = await asyncio.wait_for(
-                        self._get_all_material_codes(),
+                        self._get_all_material_codes(warehouse_codes),
                         timeout=30
                     )
                 except asyncio.TimeoutError:
@@ -324,8 +324,8 @@ class InventoryAnalysisStreamService:
             cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
-                yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
-                async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'inventory', all_combo_data):
                     # 检查会话是否已取消
                     if session_id and session_manager.is_session_cancelled(session_id):
                         yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
@@ -505,7 +505,7 @@ class InventoryAnalysisStreamService:
                             fd_warehouse_location, fd_current_water_level, fd_in_transit_qty,
                             fd_stock_status, fd_suggested_action,
                             fd_compare_date, fd_create_time, fd_update_time
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                             fd_start_date = VALUES(fd_start_date),
                             fd_end_date = VALUES(fd_end_date),
@@ -712,8 +712,8 @@ class InventoryAnalysisStreamService:
                 cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
                 if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
-                    async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'inventory', all_combo_data):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content
@@ -1135,15 +1135,27 @@ class InventoryAnalysisStreamService:
 
         return warehouse_info
 
-    async def _get_all_material_codes(self) -> List[str]:
-        """获取所有物料编码"""
+    async def _get_all_material_codes(self, warehouse_codes: List[str] = None) -> List[str]:
+        """获取物料编码（可指定仓库范围）
+        
+        Args:
+            warehouse_codes: 仓库编码列表，如果指定则只获取这些仓库下有出库记录的物料
+        """
         material_codes = []
         conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
 
-            cur.execute("SELECT DISTINCT fd_material_code FROM mt_historical_outbound")
+            query = "SELECT DISTINCT fd_material_code FROM mt_historical_outbound"
+            params = []
+            
+            if warehouse_codes and len(warehouse_codes) > 0:
+                placeholders = ','.join(['%s'] * len(warehouse_codes))
+                query += f" WHERE fd_warehouse_code IN ({placeholders})"
+                params.extend(warehouse_codes)
+            
+            cur.execute(query, params)
             rows = cur.fetchall()
 
             for row in rows:
