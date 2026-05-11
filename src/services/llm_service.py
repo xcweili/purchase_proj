@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-LLM服务封装 - 基于OpenAI SDK
+LLM服务封装 - 支持快速中断
 """
 import openai
 import json
@@ -13,12 +13,6 @@ from typing import Optional, AsyncGenerator, List, Dict
 logging.basicConfig(level=logging.INFO, format='[LLM] %(message)s')
 logger = logging.getLogger(__name__)
 
-# client = openai.Client(
-#     api_key="gpustack_ddb0c780dd843b12_67fea5d3d141e2f75091b6ba6e495707",
-#     base_url="http://10.255.216.2/v1",
-# )
-# model = "qwen3.5-122b-a10b-fp8"
-
 client = openai.Client(
     api_key="sk-3f9a72b998164fd989a0c1b6df844669",
     base_url="https://api.deepseek.com",
@@ -27,7 +21,7 @@ model = "deepseek-v4-flash"
 
 
 class LLMService:
-    """LLM服务封装类"""
+    """LLM服务封装类 - 支持快速中断"""
 
     @staticmethod
     async def chat_stream(
@@ -38,8 +32,8 @@ class LLMService:
         messages: Optional[List[Dict[str, str]]] = None,
         cancel_event: Optional[asyncio.Event] = None
     ) -> AsyncGenerator[str, None]:
-        """流式调用LLM模型 - 真正的实时流式输出，同时解析reasoning和content
-        
+        """流式调用LLM模型 - 支持快速中断
+
         Args:
             user_prompt: 用户提示
             system_prompt: 系统提示
@@ -53,9 +47,11 @@ class LLMService:
 
         start_time = time.time()
         queue = asyncio.Queue()
+        stream_closed = False  # 标记流是否已关闭
 
         def stream_generator():
             """在线程中执行同步流式请求"""
+            nonlocal stream_closed
             try:
                 if messages:
                     msg_list = [{"role": "system", "content": default_system}]
@@ -76,7 +72,7 @@ class LLMService:
                 )
 
                 for chunk in stream:
-                    # 检查是否被取消
+                    # 每次迭代都检查取消状态 - 毫秒级响应
                     if cancel_event and cancel_event.is_set():
                         logger.info("[chat_stream] 检测到取消信号，停止处理LLM响应")
                         break
@@ -101,9 +97,11 @@ class LLMService:
                         logger.error(f"[chat_stream] 处理chunk失败: {str(e)}, chunk: {chunk}")
                         continue
 
+                stream_closed = True
                 queue.put_nowait((False, None))
             except Exception as e:
                 logger.error(f"[chat_stream] 线程流式请求失败: {str(e)}")
+                stream_closed = True
                 queue.put_nowait((False, str(e)))
 
         try:
@@ -118,16 +116,28 @@ class LLMService:
 
             while True:
                 try:
-                    success, data = await asyncio.wait_for(queue.get(), timeout=120.0)
+                    # 缩短超时时间到1秒，更快响应取消
+                    success, data = await asyncio.wait_for(queue.get(), timeout=1.0)
                     if success:
                         yield data
                     else:
                         if data:
-                            logger.error(f"[chat_stream] 流式请求出错: {data}")
+                            if cancel_event and cancel_event.is_set():
+                                logger.info("[chat_stream] 流式请求因取消而终止")
+                            else:
+                                logger.error(f"[chat_stream] 流式请求出错: {data}")
                         break
                 except asyncio.CancelledError:
                     logger.info("[chat_stream] 流式生成器被取消")
+                    if cancel_event:
+                        cancel_event.set()
                     break
+                except asyncio.TimeoutError:
+                    # 超时检查 - 主动检查取消状态
+                    if cancel_event and cancel_event.is_set():
+                        logger.info("[chat_stream] 等待时检测到取消信号")
+                        break
+                    # 继续等待
 
             elapsed = time.time() - start_time
             logger.info(f"[chat_stream] LLM调用完成, 耗时: {elapsed:.2f} 秒")
@@ -191,7 +201,6 @@ class LLMService:
         start_time = time.time()
 
         try:
-            # logger.info(f"[chat] 准备发送请求")
             response = client.chat.completions.create(
                 model=model,
                 messages=[

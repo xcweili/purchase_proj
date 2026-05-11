@@ -21,6 +21,8 @@ class SessionState:
     cancelled_at: Optional[datetime] = None
     # 用于通知生成器停止的事件
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # 存储回调函数列表，用于更直接的取消操作
+    cancel_callbacks: Set[Callable] = field(default_factory=set)
 
 
 class SessionManager:
@@ -81,8 +83,32 @@ class SessionManager:
         """获取会话状态"""
         return self._sessions.get(session_id)
 
+    def register_cancel_callback(self, session_id: str, callback: Callable):
+        """注册取消回调函数，用于更直接的资源清理
+
+        Args:
+            session_id: 会话ID
+            callback: 取消时调用的回调函数
+        """
+        session = self._sessions.get(session_id)
+        if session:
+            session.cancel_callbacks.add(callback)
+            logger.debug(f"[SessionManager] 已注册取消回调: {session_id}")
+
+    def unregister_cancel_callback(self, session_id: str, callback: Callable):
+        """注销取消回调函数
+
+        Args:
+            session_id: 会话ID
+            callback: 要注销的回调函数
+        """
+        session = self._sessions.get(session_id)
+        if session:
+            session.cancel_callbacks.discard(callback)
+            logger.debug(f"[SessionManager] 已注销取消回调: {session_id}")
+
     def cancel_session(self, session_id: str) -> bool:
-        """取消会话
+        """取消会话（立即生效）
 
         Args:
             session_id: 会话ID
@@ -99,9 +125,21 @@ class SessionManager:
             logger.info(f"[SessionManager] 会话已处于取消状态: {session_id}")
             return True
 
+        # 立即标记为取消
         session.is_cancelled = True
+        session.is_active = False
         session.cancelled_at = datetime.now()
+        
+        # 设置取消事件 - 通知所有等待的协程
         session.cancel_event.set()
+        
+        # 执行所有注册的回调函数，进行资源清理
+        for callback in session.cancel_callbacks:
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"[SessionManager] 执行取消回调失败: {str(e)}")
+        
         logger.info(f"[SessionManager] 会话已取消: {session_id}, 类型: {session.agent_type}")
         return True
 
@@ -110,9 +148,19 @@ class SessionManager:
         session = self._sessions.get(session_id)
         return session.is_cancelled if session else True
 
+    def is_session_active(self, session_id: str) -> bool:
+        """检查会话是否仍在活跃"""
+        session = self._sessions.get(session_id)
+        return session.is_active if session else False
+
     def remove_session(self, session_id: str):
         """移除会话"""
         if session_id in self._sessions:
+            # 确保先取消会话
+            session = self._sessions[session_id]
+            if not session.is_cancelled:
+                session.is_cancelled = True
+                session.cancel_event.set()
             del self._sessions[session_id]
             logger.info(f"[SessionManager] 会话已移除: {session_id}")
 
@@ -120,6 +168,32 @@ class SessionManager:
         """获取会话的取消事件"""
         session = self._sessions.get(session_id)
         return session.cancel_event if session else None
+
+    async def wait_for_cancel(self, session_id: str, timeout: Optional[float] = None) -> bool:
+        """等待会话取消（可超时）
+
+        Args:
+            session_id: 会话ID
+            timeout: 超时时间（秒），None表示无限等待
+
+        Returns:
+            bool: 是否被取消（超时返回False）
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            return True
+
+        if session.is_cancelled:
+            return True
+
+        try:
+            if timeout:
+                await asyncio.wait_for(session.cancel_event.wait(), timeout=timeout)
+            else:
+                await session.cancel_event.wait()
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def _cleanup_expired_sessions(self):
         """定期清理过期会话"""

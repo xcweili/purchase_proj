@@ -243,11 +243,8 @@ class SupplierMatchStreamService:
                     if content:
                         yield content
             else:
+                # 调用LLM流式API，传入cancel_event实现快速中断
                 async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
-                    # 检查会话是否已取消
-                    if session_id and session_manager.is_session_cancelled(session_id):
-                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
-                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
