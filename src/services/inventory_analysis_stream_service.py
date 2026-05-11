@@ -472,6 +472,7 @@ class InventoryAnalysisStreamService:
                         '', 0, in_transit_qty, stock_status,
                         suggested_action,
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     ))
                 except Exception as e:
@@ -506,8 +507,8 @@ class InventoryAnalysisStreamService:
                             fd_unit, fd_purchase_request_price,
                             fd_warehouse_location, fd_current_water_level, fd_in_transit_qty,
                             fd_stock_status, fd_suggested_action,
-                            fd_create_time, fd_update_time
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            fd_compare_date, fd_create_time, fd_update_time
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                             fd_start_date = VALUES(fd_start_date),
                             fd_end_date = VALUES(fd_end_date),
@@ -521,6 +522,7 @@ class InventoryAnalysisStreamService:
                             fd_current_water_level = VALUES(fd_current_water_level),
                             fd_stock_status = VALUES(fd_stock_status),
                             fd_suggested_action = VALUES(fd_suggested_action),
+                            fd_compare_date = VALUES(fd_compare_date),
                             fd_update_time = VALUES(fd_update_time)
                     ''', batch_data)
                     

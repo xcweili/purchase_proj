@@ -852,12 +852,12 @@ class AllocationStreamService:
             plans = []
             for row in rows:
                 plans.append({
-                    'planId': row['fd_plan_id'] or row['id'],
+                    'planId': str(row['fd_plan_id'] or row['id']),
                     'planCode': row['fd_code_use'],
                     'materialCode': row['fd_material_code'],
                     'materialDesc': row['fd_desc'],
                     'techSpecId': row['fd_tech_spec_id'],
-                    'demandQty': row['fd_requisition_num'] or 0,
+                    'demandQty': float(row['fd_requisition_num'] or 0),
                     'warehouseCode': row['fd_warehouse_code'],
                     'unit': row['fd_unit'],
                     'unitCode': row['fd_unit_code'],
@@ -865,7 +865,7 @@ class AllocationStreamService:
                     'projectCode': row['fd_project_code'],
                     'unitName': row['fd_unit_name'],
                     'unitFactoryCode': row['fd_unit_factory_code'],
-                    'unitPrice': row['fd_unit_price'] or 0,
+                    'unitPrice': float(row['fd_unit_price'] or 0),
                     'demandDate': row['fd_requisition_date'],
                     'planType': row['apply_way']
                 })
@@ -946,6 +946,9 @@ class AllocationStreamService:
             stocks = []
             for row in rows:
                 loc_code = row['loc_code']
+                distance_val = warehouse_distances.get(loc_code)
+                if distance_val is not None:
+                    distance_val = float(distance_val)
                 stocks.append({
                     'material_code': row['material_code'],
                     'material_desc': row['material_desc'],
@@ -956,7 +959,7 @@ class AllocationStreamService:
                     'unit_price': float(row['unit_price'] or 0) if row['unit_price'] else 0,
                     'source_type': row['source_type'] or '',
                     'factory_name': row['factory_name'] or '',
-                    'distance': warehouse_distances.get(loc_code)
+                    'distance': distance_val
                 })
 
             return stocks
