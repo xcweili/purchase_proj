@@ -3,7 +3,8 @@
 import json
 import logging
 import sqlite3
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -23,33 +24,14 @@ app.add_middleware(
 )
 
 # ============================================
+# 会话管理器导入
+# ============================================
+from .services.session_manager import session_manager
+
+# ============================================
 # 服务层导入
 # ============================================
 from .services import real_db, llm_service
-from .services import AllocationService
-from .services import InventoryAnalysisService
-from .services import SupplierMatchService
-
-# ============================================
-# 智能体导入
-# ============================================
-from .agents.inventory_analysis_agent import InventoryAnalysisAgent
-from .agents.supplier_match_agent import SupplierMatchAgent
-from .agents.allocation_agent import AllocationAgent
-
-# ============================================
-# 智能体实例化
-# ============================================
-allocation_agent = AllocationAgent(real_db, llm_service.chat_stream, llm_service.chat)
-inventory_analysis_agent = InventoryAnalysisAgent(real_db, llm_service.chat_stream, llm_service.chat)
-supplier_match_agent = SupplierMatchAgent(real_db, llm_service.chat_stream, llm_service.chat)
-
-# ============================================
-# 中间层服务实例化
-# ============================================
-allocation_service = AllocationService(real_db, allocation_agent)
-inventory_analysis_service = InventoryAnalysisService(real_db, inventory_analysis_agent)
-supplier_match_service = SupplierMatchService(real_db, supplier_match_agent)
 
 # ============================================
 # 流式服务实例化
@@ -91,120 +73,6 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
 
 # ============================================
-# 智能调配接口
-# ============================================
-@app.post("/api/allocation/match")
-async def allocation_match(request: AllocationMatchRequest):
-    """智能调配接口"""
-    strategy_val = request.strategy if request.strategy else ""
-    return await allocation_service.process_allocation(
-        strategy=strategy_val,
-        warehouse_code=request.warehouseCode or "",
-        source_type=request.sourceType or "",
-        project_unit=request.projectUnit or "",
-        demand_start_date=request.demandStartDate or "",
-        demand_end_date=request.demandEndDate or "",
-        plan_type=request.planType or "",
-        material_codes=request.materialCodes
-    )
-
-# ============================================
-# 库存分析接口
-# ============================================
-@app.post("/api/inventory/analyze")
-async def inventory_analyze(request: InventoryAnalysisRequest):
-    """库存分析接口 - 根据参数筛选仓库和物料进行分析"""
-    return await inventory_analysis_service.analyze(
-        start_date=request.startDate,
-        end_date=request.endDate,
-        inventory_levels=request.inventoryLevels,
-        material_codes=request.materialCodes,
-        season_factor_weight=request.seasonFactorWeight,
-        safety_redundancy_ratio=request.safetyRedundancyRatio
-    )
-
-# ============================================
-# 供应商匹配接口
-# ============================================
-@app.post("/api/supplier/match")
-async def supplier_match(request: SupplierMatchRequest):
-    """供应商匹配接口 - 遍历每个计划动态匹配"""
-    return await supplier_match_service.match(
-        input_plans=request.plans
-    )
-
-@app.get("/api/supplier/match/results")
-async def get_supplier_match_results(
-    material_code: str = None,
-    match_status: str = None,
-    strategy: str = None,
-    limit: int = 100
-):
-    """查询供应商匹配结果"""
-    conn = real_db._get_connection()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    query = '''
-        SELECT id, fd_material_code, fd_material_desc, fd_match_status, fd_strategy,
-               fd_company, fd_project_def, fd_project_desc,
-               fd_demand_qty, fd_warehouse_code, fd_tech_spec_id,
-               fd_supplier_results, fd_total_cost, fd_unmet_demand,
-               fd_create_time
-        FROM mt_supplier_match_result
-        WHERE 1=1
-    '''
-    params = []
-
-    if material_code:
-        query += ' AND fd_material_code = %s'
-        params.append(material_code)
-
-    if match_status:
-        query += ' AND fd_match_status = %s'
-        params.append(match_status)
-
-    if strategy:
-        query += ' AND fd_strategy = %s'
-        params.append(strategy)
-
-    query += ' ORDER BY fd_create_time DESC LIMIT %s'
-    params.append(limit)
-
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
-    results = []
-    for row in rows:
-        results.append({
-            'id': row['id'],
-            'materialCode': row['fd_material_code'],
-            'materialDesc': row['fd_material_desc'],
-            'matchStatus': row['fd_match_status'],
-            'strategy': row['fd_strategy'],
-            'company': row['fd_company'],
-            'projectDef': row['fd_project_def'],
-            'projectDesc': row['fd_project_desc'],
-            'demandQty': row['fd_demand_qty'],
-            'warehouseCode': row['fd_warehouse_code'],
-            'techSpecId': row['fd_tech_spec_id'],
-            'supplierResults': json.loads(row['fd_supplier_results']) if row['fd_supplier_results'] else [],
-            'totalCost': row['fd_total_cost'],
-            'unmetDemand': row['fd_unmet_demand'],
-            'createTime': row['fd_create_time']
-        })
-
-    return {
-        'code': 200,
-        'message': 'success',
-        'data': {
-            'total': len(results),
-            'results': results
-        }
-    }
-
-# ============================================
 # 智能调配接口 - 流式版本
 # ============================================
 @app.post("/api/allocation/match/stream")
@@ -219,21 +87,39 @@ async def allocation_match_stream(request: AllocationMatchRequest):
     logger.info(request.planType)
     logger.info(request.materialCodes)
     logger.info(request.analyzeMode)
+
+    # 创建会话
+    session_id = session_manager.create_session("allocation")
     strategy_val = request.strategy if request.strategy else "time"
+
     async def response_generator():
-        async for chunk in allocation_stream_service.stream_analyze(
-            strategy=strategy_val,
-            warehouse_code=request.warehouseCode or "",
-            source_type=request.sourceType or "",
-            project_unit=request.projectUnit or "",
-            demand_start_date=request.demandStartDate or "",
-            demand_end_date=request.demandEndDate or "",
-            plan_type=request.planType or "",
-            material_codes=request.materialCodes,
-            analyze_mode=request.analyzeMode
-        ):
-            yield chunk
-    
+        try:
+            async for chunk in allocation_stream_service.stream_analyze(
+                strategy=strategy_val,
+                warehouse_code=request.warehouseCode or "",
+                source_type=request.sourceType or "",
+                project_unit=request.projectUnit or "",
+                demand_start_date=request.demandStartDate or "",
+                demand_end_date=request.demandEndDate or "",
+                plan_type=request.planType or "",
+                material_codes=request.materialCodes,
+                analyze_mode=request.analyzeMode,
+                session_id=session_id
+            ):
+                # 检查会话是否被取消
+                if session_manager.is_session_cancelled(session_id):
+                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
+                    logger.info(f"[AllocationStream] 会话 {session_id} 已被终止")
+                    break
+                yield chunk
+        except asyncio.CancelledError:
+            logger.info(f"[AllocationStream] 流式响应被取消: {session_id}")
+            yield "\n\n❌ 【会话已终止】连接已关闭\n"
+        finally:
+            # 清理会话
+            session_manager.remove_session(session_id)
+            logger.info(f"[AllocationStream] 会话已清理: {session_id}")
+
     return StreamingResponse(
         response_generator(),
         media_type="text/plain; charset=utf-8",
@@ -242,7 +128,8 @@ async def allocation_match_stream(request: AllocationMatchRequest):
             "Pragma": "no-cache",
             "Expires": "0",
             "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked"
+            "Transfer-Encoding": "chunked",
+            "X-Session-Id": session_id
         }
     )
 
@@ -259,19 +146,36 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     logger.info(request.seasonFactorWeight)
     logger.info(request.safetyRedundancyRatio)
     logger.info(request.analyzeMode)
-    
+
+    # 创建会话
+    session_id = session_manager.create_session("inventory")
+
     async def response_generator():
-        async for chunk in inventory_analysis_stream_service.stream_analyze(
-            start_date=request.startDate,
-            end_date=request.endDate,
-            inventory_levels=request.inventoryLevels,
-            material_codes=request.materialCodes,
-            season_factor_weight=request.seasonFactorWeight,
-            safety_redundancy_ratio=request.safetyRedundancyRatio,
-            analyze_mode=request.analyzeMode
-        ):
-            yield chunk
-    
+        try:
+            async for chunk in inventory_analysis_stream_service.stream_analyze(
+                start_date=request.startDate,
+                end_date=request.endDate,
+                inventory_levels=request.inventoryLevels,
+                material_codes=request.materialCodes,
+                season_factor_weight=request.seasonFactorWeight,
+                safety_redundancy_ratio=request.safetyRedundancyRatio,
+                analyze_mode=request.analyzeMode,
+                session_id=session_id
+            ):
+                # 检查会话是否被取消
+                if session_manager.is_session_cancelled(session_id):
+                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
+                    logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
+                    break
+                yield chunk
+        except asyncio.CancelledError:
+            logger.info(f"[InventoryStream] 流式响应被取消: {session_id}")
+            yield "\n\n❌ 【会话已终止】连接已关闭\n"
+        finally:
+            # 清理会话
+            session_manager.remove_session(session_id)
+            logger.info(f"[InventoryStream] 会话已清理: {session_id}")
+
     return StreamingResponse(
         response_generator(),
         media_type="text/plain; charset=utf-8",
@@ -280,7 +184,8 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
             "Pragma": "no-cache",
             "Expires": "0",
             "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked"
+            "Transfer-Encoding": "chunked",
+            "X-Session-Id": session_id
         }
     )
 
@@ -291,13 +196,31 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
 async def supplier_match_stream(request: SupplierMatchRequest):
     """供应商匹配接口 - 流式输出"""
     logger.info(request.plans)
+
+    # 创建会话
+    session_id = session_manager.create_session("supplier")
+
     async def response_generator():
-        async for chunk in supplier_match_stream_service.stream_analyze(
-            input_plans=request.plans,
-            analyze_mode=request.analyzeMode
-        ):
-            yield chunk
-    
+        try:
+            async for chunk in supplier_match_stream_service.stream_analyze(
+                input_plans=request.plans,
+                analyze_mode=request.analyzeMode,
+                session_id=session_id
+            ):
+                # 检查会话是否被取消
+                if session_manager.is_session_cancelled(session_id):
+                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
+                    logger.info(f"[SupplierStream] 会话 {session_id} 已被终止")
+                    break
+                yield chunk
+        except asyncio.CancelledError:
+            logger.info(f"[SupplierStream] 流式响应被取消: {session_id}")
+            yield "\n\n❌ 【会话已终止】连接已关闭\n"
+        finally:
+            # 清理会话
+            session_manager.remove_session(session_id)
+            logger.info(f"[SupplierStream] 会话已清理: {session_id}")
+
     return StreamingResponse(
         response_generator(),
         media_type="text/plain; charset=utf-8",
@@ -306,7 +229,8 @@ async def supplier_match_stream(request: SupplierMatchRequest):
             "Pragma": "no-cache",
             "Expires": "0",
             "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked"
+            "Transfer-Encoding": "chunked",
+            "X-Session-Id": session_id
         }
     )
 
@@ -333,12 +257,85 @@ async def chat_stream(request: ChatRequest):
 
 
 # ============================================
+# 会话管理接口
+# ============================================
+@app.post("/api/session/{session_id}/stop")
+async def stop_session(session_id: str):
+    """终止指定会话的流式生成
+
+    Args:
+        session_id: 会话ID
+
+    Returns:
+        终止结果
+    """
+    success = session_manager.cancel_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="会话不存在或已结束")
+
+    return {
+        "code": 200,
+        "message": "会话终止信号已发送",
+        "data": {
+            "sessionId": session_id,
+            "stopped": True
+        }
+    }
+
+
+@app.get("/api/session/{session_id}/status")
+async def get_session_status(session_id: str):
+    """获取会话状态
+
+    Args:
+        session_id: 会话ID
+
+    Returns:
+        会话状态信息
+    """
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已结束")
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "sessionId": session.session_id,
+            "agentType": session.agent_type,
+            "isActive": session.is_active,
+            "isCancelled": session.is_cancelled,
+            "createdAt": session.created_at.isoformat() if session.created_at else None,
+            "cancelledAt": session.cancelled_at.isoformat() if session.cancelled_at else None
+        }
+    }
+
+
+# ============================================
 # 健康检查接口
 # ============================================
 @app.get("/api/health")
 async def health_check():
     """健康检查接口"""
     return {"status": "ok"}
+
+
+# ============================================
+# 应用启动和关闭事件
+# ============================================
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化"""
+    await session_manager.start()
+    logger.info("[Main] 应用启动完成，会话管理器已初始化")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时清理"""
+    await session_manager.stop()
+    logger.info("[Main] 应用关闭，会话管理器已停止")
+
 
 # ============================================
 # 静态文件服务

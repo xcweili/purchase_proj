@@ -8,30 +8,29 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.supplier_match_service import SupplierMatchService
 from ..services.context_manager import ContextManager
+from ..services.session_manager import session_manager
 
 
 class SupplierMatchStreamService:
-    """供应商匹配服务 - 流式版本（复用SupplierMatchService的数据查询逻辑）"""
+    """供应商匹配服务 - 流式版本"""
 
     def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
         self.llm_func = llm_func
-        self._service = SupplierMatchService.__new__(SupplierMatchService)
-        self._service.db = db
         if llm_func:
             self.context_manager = ContextManager(llm_func, llm_stream_func)
         else:
             self.context_manager = None
 
-    async def stream_analyze(self, input_plans: List[Dict[str, Any]] = None, analyze_mode: str = "batch"):
+    async def stream_analyze(self, input_plans: List[Dict[str, Any]] = None, analyze_mode: str = "batch", session_id: str = None):
         """流式分析供应商匹配
 
         Args:
             input_plans: 输入的补货计划列表，如果为None则从数据库查询
             analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
+            session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
         yield "🚀 【智能供应商匹配系统】正在启动高级供应商匹配引擎...\n\n"
@@ -65,7 +64,7 @@ class SupplierMatchStreamService:
                 logger.info("正在从数据库查询补货计划...")
                 try:
                     plans = await asyncio.wait_for(
-                        self._service._query_plans(),
+                        self._query_plans(),
                         timeout=30
                     )
                 except asyncio.TimeoutError:
@@ -77,6 +76,11 @@ class SupplierMatchStreamService:
             if not plans:
                 yield "❌ 补货计划数据采集失败：未查询到补货计划\n"
                 yield "   💡 建议：请检查数据源配置，或确认是否有待处理的补货计划\n"
+                return
+
+            # 检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "❌ 【会话已终止】用户已取消当前分析任务\n"
                 return
 
             if analyze_mode == "batch":
@@ -91,7 +95,7 @@ class SupplierMatchStreamService:
                 yield "   └─ 正在启动AI匹配引擎...\n"
                 yield "   └─ 预计分析时间：取决于计划数量和供应商数据规模\n\n"
                 logger.info(f"启动批量供应商匹配, plans={len(plans)}")
-                async for chunk in self._batch_analyze(plans):
+                async for chunk in self._batch_analyze(plans, session_id):
                     yield chunk
             else:
                 yield "🔄 【阶段二：AI迭代匹配】\n"
@@ -100,7 +104,7 @@ class SupplierMatchStreamService:
                 yield "   📌 匹配特点：适合计划数量较大或需要实时反馈的场景\n"
                 yield "   └─ 正在启动迭代匹配...\n\n"
                 logger.info(f"启动迭代供应商匹配, plans={len(plans)}")
-                async for chunk in self._iterative_analyze(plans):
+                async for chunk in self._iterative_analyze(plans, session_id):
                     yield chunk
 
         except Exception as e:
@@ -110,8 +114,13 @@ class SupplierMatchStreamService:
             import traceback
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
-    async def _batch_analyze(self, plans: List[Dict[str, Any]]):
-        """批量分析模式 - 一次性分析所有计划"""
+    async def _batch_analyze(self, plans: List[Dict[str, Any]], session_id: str = None):
+        """批量分析模式 - 一次性分析所有计划
+
+        Args:
+            plans: 补货计划列表
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_batch_analyze 开始, plans={len(plans)}")
         try:
             all_plan_data = []
@@ -131,6 +140,11 @@ class SupplierMatchStreamService:
             yield "   └─ 正在执行数据预处理...\n"
 
             for idx, plan in enumerate(plans, 1):
+                # 每处理一个计划前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
                 plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
                 material_code = plan.get('materialCode', '')
                 tech_id = plan.get('techSpecId', '')
@@ -141,7 +155,7 @@ class SupplierMatchStreamService:
                 if not material_desc:
                     try:
                         material_desc = await asyncio.wait_for(
-                            self._service._get_material_desc_from_stock(material_code, tech_id),
+                            self._get_material_desc_from_stock(material_code, tech_id),
                             timeout=20
                         )
                     except asyncio.TimeoutError:
@@ -150,7 +164,7 @@ class SupplierMatchStreamService:
 
                 try:
                     company = await asyncio.wait_for(
-                        self._service._get_company_from_warehouse(warehouse_code),
+                        self._get_company_from_warehouse(warehouse_code),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -159,7 +173,7 @@ class SupplierMatchStreamService:
 
                 try:
                     suppliers = await asyncio.wait_for(
-                        self._service._get_protocol_suppliers(plan),
+                        self._get_protocol_suppliers(plan),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -209,15 +223,31 @@ class SupplierMatchStreamService:
             logger.info(f"AI匹配prompt构建完成, prompt长度={len(prompt)}, "
                         f"有供应商计划数={sum(1 for p in all_plan_data if p['suppliers'])}")
 
+            # 调用LLM前检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                return
+
+            # 获取会话的取消事件
+            cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                 logger.info("prompt过长, 启用分层推理模式")
                 async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
             else:
-                async for chunk in self.llm_stream_func(prompt, system_prompt):
+                async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
@@ -416,8 +446,13 @@ class SupplierMatchStreamService:
             import traceback
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
-    async def _iterative_analyze(self, plans: List[Dict[str, Any]]):
-        """迭代分析模式 - 逐个分析每个计划"""
+    async def _iterative_analyze(self, plans: List[Dict[str, Any]], session_id: str = None):
+        """迭代分析模式 - 逐个分析每个计划
+
+        Args:
+            plans: 补货计划列表
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_iterative_analyze 开始, plans={len(plans)}")
         total_count = len(plans)
         matched_count = 0
@@ -445,7 +480,7 @@ class SupplierMatchStreamService:
                 if not material_desc:
                     try:
                         material_desc = await asyncio.wait_for(
-                            self._service._get_material_desc_from_stock(material_code, tech_id),
+                            self._get_material_desc_from_stock(material_code, tech_id),
                             timeout=20
                         )
                     except asyncio.TimeoutError:
@@ -456,7 +491,7 @@ class SupplierMatchStreamService:
                 yield "🔍 [子步骤 2/3] 获取所属单位...\n"
                 try:
                     company = await asyncio.wait_for(
-                        self._service._get_company_from_warehouse(warehouse_code),
+                        self._get_company_from_warehouse(warehouse_code),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -467,7 +502,7 @@ class SupplierMatchStreamService:
                 yield "🔍 [子步骤 3/3] 查询协议商库存...\n"
                 try:
                     suppliers = await asyncio.wait_for(
-                        self._service._get_protocol_suppliers(plan),
+                        self._get_protocol_suppliers(plan),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -491,6 +526,14 @@ class SupplierMatchStreamService:
                 prompt = self._build_single_plan_prompt(plan, suppliers, material_desc, company)
                 system_prompt = "你是一个专业的电力物料采购供应商匹配专家，擅长分析供应商协议数据并给出最优的供应商选择方案。请用清晰的中文进行分析。"
 
+                # 调用LLM前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
+                # 获取会话的取消事件
+                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
                 if self.context_manager and self.context_manager.is_too_long(prompt):
                     yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                     async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
@@ -498,7 +541,7 @@ class SupplierMatchStreamService:
                         if content:
                             yield content
                 else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
+                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content
@@ -702,3 +745,166 @@ class SupplierMatchStreamService:
 请用简洁、清晰的语言进行分析。
 """
         return prompt
+
+    # ==================== 数据查询方法（从 SupplierMatchService 迁移） ====================
+
+    async def _query_plans(self) -> List[Dict[str, Any]]:
+        """查询补货计划"""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            cur.execute('''
+                SELECT id, fd_material_no, fd_material_desc, fd_purchase_qty,
+                       fd_purchase_unit, fd_warehouse_code, fd_spec_doc_id,
+                       fd_purchase_req_NO, fd_project_def
+                FROM mt_replenishment_plan
+                WHERE fd_deleted = 0
+                ORDER BY id
+                LIMIT 100
+            ''')
+            rows = cur.fetchall()
+
+            plans = []
+            for row in rows:
+                plans.append({
+                    'planId': str(row['id']),
+                    'materialCode': row['fd_material_no'] or '',
+                    'materialDesc': row['fd_material_desc'] or '',
+                    'demandQty': row['fd_purchase_qty'] or 0,
+                    'unit': row['fd_purchase_unit'] or '',
+                    'warehouseCode': row['fd_warehouse_code'] or '',
+                    'techSpecId': row['fd_spec_doc_id'] or '',
+                    'purchaseReqNo': row['fd_purchase_req_NO'] or '',
+                    'projectDef': row['fd_project_def'] or '',
+                })
+
+            return plans
+        except Exception as e:
+            logger.error(f"[SupplierMatchStream] 查询补货计划失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    async def _get_protocol_suppliers(self, plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """获取协议供应商"""
+        material_code = plan.get('materialCode', '')
+        tech_spec_id = plan.get('techSpecId', '')
+
+        if not material_code or not tech_spec_id:
+            logger.warning(f"[SupplierMatchStream] 物料编码或技术规范书ID为空，跳过查询: material_code={material_code}, tech_spec_id={tech_spec_id}")
+            return []
+
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            query = '''
+                SELECT fd_protocol_no, fd_protocol_line, fd_mdm_supplier, fd_network_supplier,
+                       fd_supplier_desc, fd_material_code, fd_material_desc,
+                       fd_price_net, fd_net_price, fd_amount_net, fd_quantity, fd_remain_quantity,
+                       fd_execution_rate, fd_alloc_rate, fd_tech_spec_id
+                FROM mt_protocol_stock
+                WHERE fd_status = '有效'
+                  AND fd_material_code = %s
+                  AND fd_tech_spec_id = %s
+            '''
+            params = [material_code, tech_spec_id]
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            suppliers = []
+            for row in rows:
+                suppliers.append({
+                    'supplierCode': row['fd_mdm_supplier'] or row['fd_network_supplier'] or '',
+                    'supplierName': row['fd_supplier_desc'] or '',
+                    'materialCode': row['fd_material_code'] or '',
+                    'materialDesc': row['fd_material_desc'] or '',
+                    'protocolNo': row['fd_protocol_no'] or '',
+                    'protocolLine': row['fd_protocol_line'] or '',
+                    'unitPrice': float(row['fd_price_net'] or row['fd_net_price'] or 0),
+                    'totalAmount': float(row['fd_amount_net'] or 0),
+                    'totalQty': float(row['fd_quantity'] or 0),
+                    'remainQty': float(row['fd_remain_quantity'] or 0),
+                    'executionRate': float(row['fd_execution_rate'] or 0),
+                    'allocRate': float(row['fd_alloc_rate'] or 0),
+                    'techSpecId': row['fd_tech_spec_id'] or '',
+                })
+
+            return suppliers
+        except Exception as e:
+            logger.error(f"[SupplierMatchStream] 查询协议供应商失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    async def _get_material_desc_from_stock(self, material_code: str, tech_id: str = None) -> str:
+        """从库存表获取物料描述"""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            query = '''
+                SELECT material_desc
+                FROM w_stock_info_0808
+                WHERE material_code = %s
+            '''
+            params = [material_code]
+
+            if tech_id:
+                query += ' AND tech_id = %s'
+                params.append(tech_id)
+
+            query += ' LIMIT 1'
+
+            cur.execute(query, params)
+            row = cur.fetchone()
+
+            if row and row['material_desc']:
+                return row['material_desc']
+
+        except Exception as e:
+            logger.error(f"[SupplierMatchStream] 获取物料描述失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return ''
+
+    async def _get_company_from_warehouse(self, warehouse_code: str) -> str:
+        """从仓库获取所属单位"""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            cur.execute('''
+                SELECT fd_warehouse_name, fd_city_code
+                FROM mt_base_warehouse_info
+                WHERE fd_warehouse_code = %s
+            ''', (warehouse_code,))
+
+            row = cur.fetchone()
+
+            if row:
+                city_code = row['fd_city_code'] or ''
+                warehouse_name = row['fd_warehouse_name'] or ''
+
+                if city_code:
+                    return f"{city_code}区域库"
+                elif warehouse_name:
+                    return warehouse_name
+
+        except Exception as e:
+            logger.error(f"[SupplierMatchStream] 获取所属单位失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return ''

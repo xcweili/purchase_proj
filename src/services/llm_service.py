@@ -35,9 +35,19 @@ class LLMService:
         system_prompt: Optional[str] = None,
         temperature: float = 0,
         max_tokens: int = 128000,
-        messages: Optional[List[Dict[str, str]]] = None
+        messages: Optional[List[Dict[str, str]]] = None,
+        cancel_event: Optional[asyncio.Event] = None
     ) -> AsyncGenerator[str, None]:
-        """流式调用LLM模型 - 真正的实时流式输出，同时解析reasoning和content"""
+        """流式调用LLM模型 - 真正的实时流式输出，同时解析reasoning和content
+        
+        Args:
+            user_prompt: 用户提示
+            system_prompt: 系统提示
+            temperature: 温度参数
+            max_tokens: 最大token数
+            messages: 消息列表
+            cancel_event: 取消事件，用于中途取消请求
+        """
         default_system = system_prompt or "你是一个专业的采购管理分析助手，擅长库存预警、供应商匹配和仓库调配分析。"
         logger.info(f"[chat_stream] 开始调用LLM, prompt长度: {len(user_prompt)} 字符, model: {model}")
 
@@ -66,6 +76,11 @@ class LLMService:
                 )
 
                 for chunk in stream:
+                    # 检查是否被取消
+                    if cancel_event and cancel_event.is_set():
+                        logger.info("[chat_stream] 检测到取消信号，停止处理LLM响应")
+                        break
+
                     try:
                         chunk_dict = chunk.dict()
                         choices = chunk_dict.get('choices')
@@ -81,7 +96,6 @@ class LLMService:
                             delta['content'] = reasoning_content
                             delta['reasoning'] = None
                             choices[0]['delta'] = delta
-
                         queue.put_nowait((True, json.dumps(chunk_dict, ensure_ascii=False) + '\n'))
                     except Exception as e:
                         logger.error(f"[chat_stream] 处理chunk失败: {str(e)}, chunk: {chunk}")
@@ -93,17 +107,26 @@ class LLMService:
                 queue.put_nowait((False, str(e)))
 
         try:
+            # 调用前检查是否已取消
+            if cancel_event and cancel_event.is_set():
+                logger.info("[chat_stream] 调用前已检测到取消信号")
+                return
+
             logger.info(f"[chat_stream] 启动线程执行流式请求")
             thread = threading.Thread(target=stream_generator, daemon=True)
             thread.start()
 
             while True:
-                success, data = await asyncio.wait_for(queue.get(), timeout=120.0)
-                if success:
-                    yield data
-                else:
-                    if data:
-                        logger.error(f"[chat_stream] 流式请求出错: {data}")
+                try:
+                    success, data = await asyncio.wait_for(queue.get(), timeout=120.0)
+                    if success:
+                        yield data
+                    else:
+                        if data:
+                            logger.error(f"[chat_stream] 流式请求出错: {data}")
+                        break
+                except asyncio.CancelledError:
+                    logger.info("[chat_stream] 流式生成器被取消")
                     break
 
             elapsed = time.time() - start_time

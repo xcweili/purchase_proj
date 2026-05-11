@@ -8,19 +8,17 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.allocation_service import AllocationService
 from ..services.context_manager import ContextManager
+from ..services.session_manager import session_manager
 
 
 class AllocationStreamService:
-    """调配服务 - 流式版本（复用AllocationService的数据查询逻辑）"""
+    """调配服务 - 流式版本"""
 
     def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
         self.llm_func = llm_func
-        self._service = AllocationService.__new__(AllocationService)
-        self._service.db = db
         if llm_func:
             self.context_manager = ContextManager(llm_func, llm_stream_func)
         else:
@@ -30,7 +28,7 @@ class AllocationStreamService:
                             source_type: str = "", project_unit: str = "",
                             demand_start_date: str = "", demand_end_date: str = "",
                             plan_type: str = "", material_codes: List[str] = None,
-                            analyze_mode: str = "batch"):
+                            analyze_mode: str = "batch", session_id: str = None):
         """流式分析调配方案
 
         Args:
@@ -43,6 +41,7 @@ class AllocationStreamService:
             plan_type: 计划类型
             material_codes: 物料编码列表
             analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
+            session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
         yield "🚀 【智能调配系统】正在启动高级数据分析引擎...\n\n"
@@ -67,7 +66,7 @@ class AllocationStreamService:
                         f"warehouse_code={warehouse_code}, material_codes={material_codes}")
             try:
                 plans = await asyncio.wait_for(
-                    self._service._query_plans(
+                    self._query_plans(
                         project_unit=project_unit,
                         start_date=demand_start_date,
                         end_date=demand_end_date,
@@ -101,8 +100,8 @@ class AllocationStreamService:
             yield "      • 技术规范ID：用于精确匹配，确保物料规格一致性\n"
             yield "   📌 技术要点：去除重复项、验证编码格式、建立索引映射\n"
             yield "   └─ 正在执行特征提取算法...\n"
-            material_codes_list = self._service._extract_material_codes(plans)
-            tech_ids_list = self._service._extract_tech_ids(plans)
+            material_codes_list = self._extract_material_codes(plans)
+            tech_ids_list = self._extract_tech_ids(plans)
             yield f"✅ 特征提取完成\n"
             yield f"   └─ 物料编码：{len(material_codes_list)} 个（去重后）\n"
             yield f"   └─ 技术规范ID：{len(tech_ids_list)} 个\n"
@@ -120,7 +119,7 @@ class AllocationStreamService:
             yield "   └─ 正在执行库存数据检索...\n"
             logger.info(f"正在查询库存数据, material_codes_count={len(material_codes_list)}, "
                         f"source_type={source_type}, target_warehouse={warehouse_code}")
-            stocks = self._service._query_stocks(
+            stocks = self._query_stocks(
                 material_codes=material_codes_list,
                 source_type=source_type,
                 target_warehouse=warehouse_code,
@@ -149,12 +148,17 @@ class AllocationStreamService:
             yield "      • 决策支持：为AI分析提供结构化数据输入\n"
             yield "   📌 技术要点：使用哈希表加速查询、建立倒排索引、数据归一化\n"
             yield "   └─ 正在执行数据预处理...\n"
-            material_source_types = self._service._build_material_source_type_map(stocks)
+            material_source_types = self._build_material_source_type_map(stocks)
             yield f"✅ 数据预处理完成\n"
             yield f"   └─ 已构建 {len(material_source_types)} 个物料的来源映射\n"
             yield f"   └─ 映射关系：平均每个物料关联 {len(stocks)/len(material_source_types):.1f} 个仓库\n"
             yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
             logger.info(f"数据预处理完成, {len(material_source_types)} 个物料来源映射")
+
+            # 检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "❌ 【会话已终止】用户已取消当前分析任务\n"
+                return
 
             if analyze_mode == "batch":
                 yield "⚡ 【阶段五：AI智能批量分析】\n"
@@ -169,7 +173,7 @@ class AllocationStreamService:
                 yield "   └─ 预计分析时间：取决于数据规模和复杂度\n\n"
                 logger.info(f"启动批量调配分析, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
                 async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code,
-                                                     project_unit, source_type, plan_type):
+                                                     project_unit, source_type, plan_type, session_id):
                     yield chunk
             else:
                 yield "🔄 【阶段五：AI迭代分析】\n"
@@ -178,7 +182,7 @@ class AllocationStreamService:
                 yield "   📌 分析特点：适合数据量较大或需要实时反馈的场景\n"
                 yield "   └─ 正在启动迭代分析...\n\n"
                 logger.info(f"启动迭代调配分析, plans={len(plans)}, strategy={strategy}")
-                async for chunk in self._iterative_analyze(plans, stocks, strategy, warehouse_code):
+                async for chunk in self._iterative_analyze(plans, stocks, strategy, warehouse_code, session_id):
                     yield chunk
 
         except Exception as e:
@@ -190,8 +194,20 @@ class AllocationStreamService:
 
     async def _batch_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
                              strategy: str, target_warehouse: str,
-                             project_unit: str = "", source_type: str = "", plan_type: str = ""):
-        """批量分析模式 - 一次性分析所有计划"""
+                             project_unit: str = "", source_type: str = "", plan_type: str = "",
+                             session_id: str = None):
+        """批量分析模式 - 一次性分析所有计划
+
+        Args:
+            plans: 需求计划列表
+            stocks: 库存列表
+            strategy: 调配策略
+            target_warehouse: 目标仓库
+            project_unit: 项目单位
+            source_type: 来源类型
+            plan_type: 计划类型
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_batch_analyze 开始, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
         try:
             all_plan_data = []
@@ -210,6 +226,11 @@ class AllocationStreamService:
             yield "   └─ 正在执行数据预处理...\n"
 
             for idx, plan in enumerate(plans, 1):
+                # 每处理一个计划前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
                 plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
                 material_code = plan.get('materialCode') or plan.get('material_code', '')
                 tech_spec_id = plan.get('techSpecId') or ''
@@ -258,15 +279,31 @@ class AllocationStreamService:
             system_prompt = "你是一位资深的电力物料智能调配专家，具备卓越的数据分析能力和丰富的实战经验。请运用高级智能算法进行深度分析。"
             logger.info(f"AI分析prompt构建完成, prompt长度={len(prompt)}")
 
+            # 调用LLM前检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                return
+
+            # 获取会话的取消事件
+            cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                 logger.info("prompt过长, 启用分层推理模式")
                 async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
             else:
-                async for chunk in self.llm_stream_func(prompt, system_prompt):
+                async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
@@ -448,8 +485,16 @@ class AllocationStreamService:
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _iterative_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
-                                 strategy: str, target_warehouse: str):
-        """迭代分析模式 - 逐个分析每个计划"""
+                                 strategy: str, target_warehouse: str, session_id: str = None):
+        """迭代分析模式 - 逐个分析每个计划
+
+        Args:
+            plans: 需求计划列表
+            stocks: 库存列表
+            strategy: 调配策略
+            target_warehouse: 目标仓库
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_iterative_analyze 开始, plans={len(plans)}, strategy={strategy}")
         total_count = len(plans)
         full_match_count = 0
@@ -497,6 +542,14 @@ class AllocationStreamService:
                 prompt = self._build_single_plan_prompt(plan, matching_stocks, strategy, target_warehouse)
                 system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
 
+                # 调用LLM前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
+                # 获取会话的取消事件
+                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
                 if self.context_manager and self.context_manager.is_too_long(prompt):
                     yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                     async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
@@ -504,7 +557,7 @@ class AllocationStreamService:
                         if content:
                             yield content
                 else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
+                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content
@@ -749,3 +802,194 @@ class AllocationStreamService:
 请用简洁、清晰的语言进行分析。
 """
         return prompt
+
+    # ==================== 数据查询方法（从 AllocationService 迁移） ====================
+
+    async def _query_plans(self, project_unit: str, start_date: str, end_date: str,
+                           plan_type: str, warehouse_code: str,
+                           material_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """从库存使用计划表查询计划数据"""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            query = "SELECT * FROM mt_stock_use_list_plan_two WHERE 1=1"
+            params = []
+
+            if project_unit:
+                query += " AND (fd_unit_name = %s OR fd_unit_factory_code = %s)"
+                params.extend([project_unit, project_unit])
+
+            if start_date:
+                query += " AND fd_requisition_date >= %s"
+                params.append(start_date)
+
+            if end_date:
+                query += " AND fd_requisition_date <= %s"
+                params.append(end_date)
+
+            if plan_type:
+                query += " AND apply_way = %s"
+                params.append(plan_type)
+
+            query += " AND apply_way IN ('01', '05', '06')"
+
+            if warehouse_code:
+                query += " AND fd_warehouse_code = %s"
+                params.append(warehouse_code)
+
+            if material_codes and len(material_codes) > 0:
+                placeholders = ','.join(['%s' for _ in material_codes])
+                query += f" AND fd_material_code IN ({placeholders})"
+                params.extend(material_codes)
+
+            query += " LIMIT 100"
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            plans = []
+            for row in rows:
+                plans.append({
+                    'planId': row['fd_plan_id'] or row['id'],
+                    'planCode': row['fd_code_use'],
+                    'materialCode': row['fd_material_code'],
+                    'materialDesc': row['fd_desc'],
+                    'techSpecId': row['fd_tech_spec_id'],
+                    'demandQty': row['fd_requisition_num'] or 0,
+                    'warehouseCode': row['fd_warehouse_code'],
+                    'unit': row['fd_unit'],
+                    'unitCode': row['fd_unit_code'],
+                    'projectName': row['fd_project_name'],
+                    'projectCode': row['fd_project_code'],
+                    'unitName': row['fd_unit_name'],
+                    'unitFactoryCode': row['fd_unit_factory_code'],
+                    'unitPrice': row['fd_unit_price'] or 0,
+                    'demandDate': row['fd_requisition_date'],
+                    'planType': row['apply_way']
+                })
+
+            return plans
+        except Exception as e:
+            logger.error(f"[AllocationStream] 查询需求计划失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    def _query_stocks(self, material_codes: List[str], source_type: str, target_warehouse: str = '', tech_ids: List[str] = None) -> List[Dict[str, Any]]:
+        """从库存信息表查询库存数据"""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            where_clauses = ["1=1"]
+            params = []
+
+            if material_codes and len(material_codes) > 0:
+                placeholders = ','.join(['%s' for _ in material_codes])
+                where_clauses.append(f"material_code IN ({placeholders})")
+                params.extend(material_codes)
+
+            if tech_ids and len(tech_ids) > 0:
+                placeholders = ','.join(['%s' for _ in tech_ids])
+                where_clauses.append(f"tech_id IN ({placeholders})")
+                params.extend(tech_ids)
+
+            if source_type:
+                where_clauses.append("source_type = %s")
+                params.append(source_type)
+
+            where_clause = " AND ".join(where_clauses)
+
+            query = f"""
+                SELECT 
+                    material_code,
+                    MAX(material_desc) as material_desc,
+                    tech_id,
+                    loc_code,
+                    MAX(loc_name) as loc_name,
+                    SUM(stock_qty) as stock_qty,
+                    MAX(unit_price) as unit_price,
+                    GROUP_CONCAT(DISTINCT source_type ORDER BY source_type SEPARATOR '/') as source_type,
+                    GROUP_CONCAT(DISTINCT factory_name ORDER BY factory_name SEPARATOR '/') as factory_name
+                FROM w_stock_info_0808
+                WHERE {where_clause}
+                GROUP BY loc_code, material_code, tech_id
+                LIMIT 500
+            """
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            warehouse_distances = {}
+            if target_warehouse:
+                try:
+                    cur.execute("""
+                        SELECT fd_source_warehouse_code, fd_target_warehouse_code, fd_distance
+                        FROM mt_warehouse_distance
+                        WHERE fd_target_warehouse_code = %s
+                    """, (target_warehouse,))
+                    distance_rows = cur.fetchall()
+                    for drow in distance_rows:
+                        src_wh = drow.get('fd_source_warehouse_code', '')
+                        distance = drow.get('fd_distance', 0) or 0
+                        if isinstance(distance, float):
+                            pass
+                        warehouse_distances[src_wh] = distance
+                    logger.info(f"[AllocationStream] 获取到仓库距离: {warehouse_distances}")
+                except Exception as e:
+                    logger.warning(f"[AllocationStream] 查询仓库距离失败: {e}")
+
+            stocks = []
+            for row in rows:
+                loc_code = row['loc_code']
+                stocks.append({
+                    'material_code': row['material_code'],
+                    'material_desc': row['material_desc'],
+                    'tech_id': row['tech_id'],
+                    'loc_code': loc_code,
+                    'loc_name': row['loc_name'],
+                    'stock_qty': float(row['stock_qty'] or 0),
+                    'unit_price': float(row['unit_price'] or 0) if row['unit_price'] else 0,
+                    'source_type': row['source_type'] or '',
+                    'factory_name': row['factory_name'] or '',
+                    'distance': warehouse_distances.get(loc_code)
+                })
+
+            return stocks
+        except Exception as e:
+            logger.error(f"[AllocationStream] 查询库存失败: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    def _build_material_source_type_map(self, stocks: List[Dict[str, Any]]) -> Dict[str, str]:
+        """构建物料编码到库存类型的映射"""
+        source_type_map = {}
+        for stock in stocks:
+            material_code = stock.get('material_code', '')
+            source_type = stock.get('source_type', '')
+            if material_code and source_type:
+                if material_code not in source_type_map:
+                    source_type_map[material_code] = source_type
+        return source_type_map
+
+    def _extract_material_codes(self, plans: List[Dict[str, Any]]) -> List[str]:
+        """从计划列表中提取去重后的物料编码列表"""
+        return list(set([
+            p.get('materialCode') or p.get('material_code', '')
+            for p in plans
+            if p.get('materialCode') or p.get('material_code')
+        ]))
+
+    def _extract_tech_ids(self, plans: List[Dict[str, Any]]) -> List[str]:
+        """从计划列表中提取所有不重复的技术规范书ID"""
+        return list(set([
+            p.get('techSpecId') or p.get('tech_spec_id', '')
+            for p in plans
+            if p.get('techSpecId') or p.get('tech_spec_id')
+        ]))

@@ -601,6 +601,10 @@
                             <span>🚀</span>
                             <span>开始分析</span>
                         </button>
+                        <button class="btn btn-secondary" id="btn-stop" style="display: none; background: #dc3545; color: white;">
+                            <span>⏹️</span>
+                            <span>终止</span>
+                        </button>
                         <button class="btn btn-secondary" id="btn-clear">
                             <span>🗑️</span>
                             <span>清空</span>
@@ -639,6 +643,8 @@
         let lastMessageDiv = null;
         let pendingContent = '';
         let parseTimeout = null;
+        let currentSessionId = null;
+        let abortController = null;
 
         // 配置marked库
         marked.setOptions({
@@ -692,57 +698,67 @@
 
         document.getElementById('btn-submit').addEventListener('click', async () => {
             if (isStreaming) return;
-            
+
             const btn = document.getElementById('btn-submit');
+            const stopBtn = document.getElementById('btn-stop');
             const responseArea = document.getElementById('response-area');
             showThinking = document.getElementById('toggle-thinking').checked;
-            
+
+            // 重置会话状态
+            currentSessionId = null;
+            abortController = new AbortController();
+
             isStreaming = true;
-            btn.disabled = true;
-            btn.innerHTML = '<span>⏳</span><span>分析中...</span>';
-            
+            btn.style.display = 'none';
+            stopBtn.style.display = 'flex';
+
             responseArea.innerHTML = '';
             responseArea.classList.add('loading');
             lastMessageDiv = null;
-            
+
             const titles = {
                 allocation: '智能调配分析',
                 inventory: '库存分析',
                 supplier: '供应商匹配'
             };
             document.getElementById('response-title').textContent = titles[currentAgent];
-            
+
             try {
                 const url = `/api/${currentAgent}/${currentAgent === 'allocation' ? 'match' : currentAgent === 'inventory' ? 'analyze' : 'match'}/stream`;
                 const data = buildRequestData();
-                
+
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify(data),
+                    signal: abortController.signal
                 });
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                
+
+                // 直接从响应头获取会话ID（推荐方式）
+                currentSessionId = response.headers.get('X-Session-Id');
+                console.log('[Session] 从响应头获取会话ID:', currentSessionId);
+
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder('utf-8');
-                
+
                 responseArea.classList.remove('loading');
-                
+
                 let buffer = '';
-                
+
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    
+
                     const chunk = decoder.decode(value, { stream: true });
                     processStreamChunk(chunk);
                 }
-                
+
                 // 流结束后，强制进行一次最终解析
                 if (parseTimeout) {
                     clearTimeout(parseTimeout);
@@ -757,14 +773,54 @@
                         }
                     }
                 }
-                
+
             } catch (error) {
-                addMessage('error', `❌ 分析失败: ${error.message}`);
+                if (error.name === 'AbortError') {
+                    addMessage('error', '❌ 分析已终止');
+                } else {
+                    addMessage('error', `❌ 分析失败: ${error.message}`);
+                }
             } finally {
                 isStreaming = false;
-                btn.disabled = false;
-                btn.innerHTML = '<span>🚀</span><span>开始分析</span>';
+                btn.style.display = 'flex';
+                stopBtn.style.display = 'none';
+                currentSessionId = null;
+                abortController = null;
             }
+        });
+
+        // 终止按钮事件
+        document.getElementById('btn-stop').addEventListener('click', async () => {
+            if (!isStreaming) return;
+
+            const stopBtn = document.getElementById('btn-stop');
+            stopBtn.disabled = true;
+            stopBtn.innerHTML = '<span>⏳</span><span>终止中...</span>';
+
+            // 1. 先尝试通过API发送终止信号
+            if (currentSessionId) {
+                try {
+                    const response = await fetch(`/api/session/${currentSessionId}/stop`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    if (response.ok) {
+                        console.log('[Stop] 终止信号已发送:', currentSessionId);
+                    }
+                } catch (e) {
+                    console.error('[Stop] 发送终止信号失败:', e);
+                }
+            }
+
+            // 2. 取消fetch请求
+            if (abortController) {
+                abortController.abort();
+            }
+
+            stopBtn.disabled = false;
+            stopBtn.innerHTML = '<span>⏹️</span><span>终止</span>';
         });
 
         function processStreamChunk(chunk) {

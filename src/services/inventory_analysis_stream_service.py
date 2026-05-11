@@ -9,19 +9,17 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..services.inventory_analysis_service import InventoryAnalysisService
 from ..services.context_manager import ContextManager
+from ..services.session_manager import session_manager
 
 
 class InventoryAnalysisStreamService:
-    """库存分析服务 - 流式版本（复用InventoryAnalysisService的数据查询逻辑）"""
+    """库存分析服务 - 流式版本"""
 
     def __init__(self, db, llm_stream_func, llm_func=None):
         self.db = db
         self.llm_stream_func = llm_stream_func
         self.llm_func = llm_func
-        self._service = InventoryAnalysisService.__new__(InventoryAnalysisService)
-        self._service.db = db
         if llm_func:
             self.context_manager = ContextManager(llm_func, llm_stream_func)
         else:
@@ -30,7 +28,7 @@ class InventoryAnalysisStreamService:
     async def stream_analyze(self, start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, material_codes: List[str] = None,
                             season_factor_weight: float = None, safety_redundancy_ratio: float = None,
-                            analyze_mode: str = "batch"):
+                            analyze_mode: str = "batch", session_id: str = None):
         """流式分析库存
 
         Args:
@@ -41,6 +39,7 @@ class InventoryAnalysisStreamService:
             season_factor_weight: 季节因子权重
             safety_redundancy_ratio: 安全冗余比例
             analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
+            session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
         yield "🚀 【智能库存分析系统】正在启动高级库存分析引擎...\n\n"
@@ -59,7 +58,7 @@ class InventoryAnalysisStreamService:
             logger.info("正在执行仓库数据检索...")
             try:
                 warehouse_info = await asyncio.wait_for(
-                    self._service._get_warehouse_info_by_levels(inventory_levels),
+                    self._get_warehouse_info_by_levels(inventory_levels),
                     timeout=30
                 )
             except asyncio.TimeoutError:
@@ -94,7 +93,7 @@ class InventoryAnalysisStreamService:
             if not material_codes or len(material_codes) == 0:
                 try:
                     material_codes = await asyncio.wait_for(
-                        self._service._get_all_material_codes(),
+                        self._get_all_material_codes(),
                         timeout=30
                     )
                 except asyncio.TimeoutError:
@@ -125,7 +124,7 @@ class InventoryAnalysisStreamService:
             logger.info(f"组合矩阵批量查询开始, warehouses={len(warehouse_codes)}, materials={len(material_codes)}")
             try:
                 all_combinations = await asyncio.wait_for(
-                    self._service._get_valid_combinations(warehouse_codes, material_codes, start_date, end_date),
+                    self._get_valid_combinations(warehouse_codes, material_codes, start_date, end_date),
                     timeout=60
                 )
             except asyncio.TimeoutError:
@@ -150,6 +149,11 @@ class InventoryAnalysisStreamService:
                 yield "   💡 建议：请检查数据配置，确认仓库、物料、技术规范数据是否完整\n"
                 return
 
+            # 检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "❌ 【会话已终止】用户已取消当前分析任务\n"
+                return
+
             if analyze_mode == "batch":
                 yield "⚡ 【阶段四：AI智能批量分析】\n"
                 yield "   📌 当前需求：对所有组合进行一次性深度智能分析\n"
@@ -162,7 +166,7 @@ class InventoryAnalysisStreamService:
                 yield "   └─ 正在启动AI分析引擎...\n"
                 yield "   └─ 预计分析时间：取决于组合数量和数据复杂度\n\n"
                 logger.info("正在启动AI分析引擎...")
-                async for chunk in self._batch_analyze(all_combinations, warehouse_info, start_date, end_date):
+                async for chunk in self._batch_analyze(all_combinations, warehouse_info, start_date, end_date, session_id):
                     yield chunk
             else:
                 yield "🔄 【阶段四：AI迭代分析】\n"
@@ -170,7 +174,7 @@ class InventoryAnalysisStreamService:
                 yield "   📌 执行动作：启动迭代分析模式，逐个处理组合\n"
                 yield "   📌 分析特点：适合组合数量较大或需要实时反馈的场景\n"
                 yield "   └─ 正在启动迭代分析...\n\n"
-                async for chunk in self._iterative_analyze(all_combinations, warehouse_info, start_date, end_date):
+                async for chunk in self._iterative_analyze(all_combinations, warehouse_info, start_date, end_date, session_id):
                     yield chunk
 
         except Exception as e:
@@ -181,8 +185,16 @@ class InventoryAnalysisStreamService:
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _batch_analyze(self, all_combinations: List[Dict[str, Any]], warehouse_info: Dict,
-                             start_date: str, end_date: str):
-        """批量分析模式 - 一次性分析所有组合"""
+                             start_date: str, end_date: str, session_id: str = None):
+        """批量分析模式 - 一次性分析所有组合
+
+        Args:
+            all_combinations: 组合列表
+            warehouse_info: 仓库信息
+            start_date: 开始日期
+            end_date: 结束日期
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_batch_analyze 开始, all_combinations={len(all_combinations)}, "
                     f"start_date={start_date}, end_date={end_date}")
         try:
@@ -231,6 +243,11 @@ class InventoryAnalysisStreamService:
             yield "   └─ 正在执行数据预处理...\n"
 
             for idx, combo in enumerate(all_combinations, 1):
+                # 每处理一个组合前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
                 warehouse_code = combo['warehouse_code']
                 material_code = combo['material_code']
                 tech_id = combo['tech_id']
@@ -241,7 +258,7 @@ class InventoryAnalysisStreamService:
                 warehouse_name = warehouse_info.get(warehouse_code, {}).get('name', '')
                 inventory_level = warehouse_info.get(warehouse_code, {}).get('level', '')
 
-                current_stock_data = await self._service._get_current_stock(warehouse_code, material_code, tech_id)
+                current_stock_data = await self._get_current_stock(warehouse_code, material_code, tech_id)
                 current_stock = 0
                 in_transit_stock = 0
                 material_desc = ''
@@ -251,7 +268,7 @@ class InventoryAnalysisStreamService:
                     material_desc = current_stock_data[0].get('material_desc', '') or ''
 
                 # 查询历史出库数据（用于预测，不使用用户传入的日期范围）
-                outbound_data = await self._service._get_outbound_data(warehouse_code, material_code, tech_id, None, None)
+                outbound_data = await self._get_outbound_data(warehouse_code, material_code, tech_id, None, None)
                 stats = self._calculate_outbound_stats(outbound_data, None, None)
 
                 combo_data = {
@@ -298,14 +315,30 @@ class InventoryAnalysisStreamService:
             system_prompt = "你是一位资深的电力物料智能库存分析专家，具备卓越的数据分析能力和丰富的库存管理实战经验。请运用高级智能算法进行深度分析。"
             logger.info(f"AI分析prompt构建完成, prompt长度={len(prompt)}, 组合数={len(all_combo_data)}")
 
+            # 调用LLM前检查会话是否已取消
+            if session_id and session_manager.is_session_cancelled(session_id):
+                yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                return
+
+            # 获取会话的取消事件
+            cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                 async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
             else:
-                async for chunk in self.llm_stream_func(prompt, system_prompt):
+                async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
+                    # 检查会话是否已取消
+                    if session_id and session_manager.is_session_cancelled(session_id):
+                        yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                        return
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         yield content
@@ -556,8 +589,16 @@ class InventoryAnalysisStreamService:
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     async def _iterative_analyze(self, all_combinations: List[Dict[str, Any]], warehouse_info: Dict,
-                                 start_date: str, end_date: str):
-        """迭代分析模式 - 逐个分析每个组合"""
+                                 start_date: str, end_date: str, session_id: str = None):
+        """迭代分析模式 - 逐个分析每个组合
+
+        Args:
+            all_combinations: 组合列表
+            warehouse_info: 仓库信息
+            start_date: 开始日期
+            end_date: 结束日期
+            session_id: 会话ID，用于支持终止功能
+        """
         logger.info(f"_iterative_analyze 开始, 总组合数={len(all_combinations)}")
         total_count = len(all_combinations)
         success_count = 0
@@ -587,7 +628,7 @@ class InventoryAnalysisStreamService:
                 yield "🔍 [子步骤 1/2] 查询当前库存数据...\n"
                 try:
                     current_stock_data = await asyncio.wait_for(
-                        self._service._get_current_stock(warehouse_code, material_code, tech_id),
+                        self._get_current_stock(warehouse_code, material_code, tech_id),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -611,7 +652,7 @@ class InventoryAnalysisStreamService:
                 yield "🔍 [子步骤 2/2] 查询历史出库数据...\n"
                 try:
                     outbound_data = await asyncio.wait_for(
-                        self._service._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date),
+                        self._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date),
                         timeout=20
                     )
                 except asyncio.TimeoutError:
@@ -663,6 +704,14 @@ class InventoryAnalysisStreamService:
                 prompt = self._build_single_combo_prompt(combo_data, start_date, end_date)
                 system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
 
+                # 调用LLM前检查会话是否已取消
+                if session_id and session_manager.is_session_cancelled(session_id):
+                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
+                    return
+
+                # 获取会话的取消事件
+                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
+
                 if self.context_manager and self.context_manager.is_too_long(prompt):
                     yield "⚠️ 检测到数据量较大，将采用分层推理模式...\n"
                     async for chunk in self.context_manager._streaming_hierarchical_reasoning(prompt, system_prompt):
@@ -670,7 +719,7 @@ class InventoryAnalysisStreamService:
                         if content:
                             yield content
                 else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt):
+                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                         content = self._parse_llm_chunk(chunk)
                         if content:
                             yield content
@@ -1045,3 +1094,229 @@ class InventoryAnalysisStreamService:
 请用简洁、清晰的语言进行分析，重点关注中位数、正态分布、同比环比等指标，给出智能分析跟补库建议。
 """
         return prompt
+
+    # ==================== 数据查询方法（从 InventoryAnalysisService 迁移） ====================
+
+    async def _get_warehouse_info_by_levels(self, inventory_levels: Optional[List[str]] = None) -> Dict[str, Dict[str, str]]:
+        """获取仓库信息（按库存层级筛选）"""
+        warehouse_info = {}
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            query = '''
+                SELECT fd_warehouse_code, fd_warehouse_name, fd_stock_level
+                FROM mt_base_warehouse_info
+                WHERE 1=1
+            '''
+            params = []
+
+            if inventory_levels and len(inventory_levels) > 0:
+                placeholders = ','.join(['%s' for _ in inventory_levels])
+                query += f" AND fd_stock_level IN ({placeholders})"
+                params.extend(inventory_levels)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                warehouse_code = row['fd_warehouse_code']
+                if warehouse_code:
+                    warehouse_info[warehouse_code] = {
+                        'name': row['fd_warehouse_name'] or '',
+                        'level': row['fd_stock_level'] or ''
+                    }
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 获取仓库信息失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return warehouse_info
+
+    async def _get_all_material_codes(self) -> List[str]:
+        """获取所有物料编码"""
+        material_codes = []
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            cur.execute("SELECT DISTINCT fd_material_code FROM mt_historical_outbound")
+            rows = cur.fetchall()
+
+            for row in rows:
+                if row['fd_material_code']:
+                    material_codes.append(str(row['fd_material_code']))
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 获取所有物料编码失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return material_codes
+
+    async def _get_valid_combinations(self, warehouse_codes: List[str], material_codes: List[str],
+                                       start_date: str = None, end_date: str = None) -> List[Dict[str, str]]:
+        """批量查询所有有效的仓库-物料-技术规范组合"""
+        combinations = []
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            start_month = None
+            end_month = None
+            if start_date and len(start_date) == 6:
+                start_month = f"{start_date[:4]}-{start_date[4:]}"
+            if end_date and len(end_date) == 6:
+                end_month = f"{end_date[:4]}-{end_date[4:]}"
+
+            query = '''
+                SELECT DISTINCT fd_warehouse_code, fd_material_code, fd_tech_id
+                FROM mt_historical_outbound
+                WHERE 1=1
+            '''
+            params = []
+
+            if warehouse_codes:
+                placeholders = ','.join(['%s'] * len(warehouse_codes))
+                query += f" AND fd_warehouse_code IN ({placeholders})"
+                params.extend(warehouse_codes)
+
+            if material_codes:
+                placeholders = ','.join(['%s'] * len(material_codes))
+                query += f" AND fd_material_code IN ({placeholders})"
+                params.extend(material_codes)
+
+            if start_month:
+                query += " AND fd_posting_month >= %s"
+                params.append(start_month)
+
+            if end_month:
+                query += " AND fd_posting_month <= %s"
+                params.append(end_month)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                combinations.append({
+                    'warehouse_code': row['fd_warehouse_code'],
+                    'material_code': str(row['fd_material_code']),
+                    'tech_id': row['fd_tech_id']
+                })
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 批量查询组合失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return combinations
+
+    async def _get_current_stock(self, warehouse_code: str, material_code: str, tech_id: str) -> List[Dict[str, Any]]:
+        """获取指定仓库+物料+tech_id的当前库存数据"""
+        stocks = []
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            cur.execute('''
+                SELECT
+                    w.loc_code as warehouse_code,
+                    w.loc_name as warehouse_name,
+                    w.material_code,
+                    w.material_desc,
+                    w.tech_id,
+                    w.stock_qty as current_stock,
+                    w.source_type,
+                    (SELECT SUM(stock_qty)
+                     FROM w_stock_info_0808
+                     WHERE material_code = w.material_code
+                       AND loc_code = w.loc_code
+                       AND source_type = '在途') as in_transit_stock
+                FROM w_stock_info_0808 w
+                WHERE w.loc_code = %s
+                  AND w.material_code = %s
+                  AND w.tech_id = %s
+            ''', (warehouse_code, str(material_code), tech_id))
+
+            rows = cur.fetchall()
+
+            for row in rows:
+                stocks.append({
+                    "warehouse_code": row['warehouse_code'],
+                    "warehouse_name": row['warehouse_name'],
+                    "material_code": row['material_code'],
+                    "material_desc": row['material_desc'],
+                    "tech_id": row['tech_id'],
+                    "current_stock": row['current_stock'] or 0,
+                    "source_type": row['source_type'] or '',
+                    "in_transit_stock": row['in_transit_stock'] or 0
+                })
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 获取当前库存失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return stocks
+
+    async def _get_outbound_data(self, warehouse_code: str, material_code: str, tech_id: str,
+                                 start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
+        """获取指定仓库+物料+tech_id的历史出库数据"""
+        outbound_data = []
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            start_month = None
+            end_month = None
+            if start_date and len(start_date) == 6:
+                start_month = f"{start_date[:4]}-{start_date[4:]}"
+            if end_date and len(end_date) == 6:
+                end_month = f"{end_date[:4]}-{end_date[4:]}"
+
+            query = '''
+                SELECT fd_posting_month, fd_outbound_qty, fd_outbound_count
+                FROM mt_historical_outbound
+                WHERE fd_warehouse_code = %s
+                  AND fd_material_code = %s
+                  AND fd_tech_id = %s
+            '''
+            params = [warehouse_code, str(material_code), tech_id]
+
+            if start_month:
+                query += " AND fd_posting_month >= %s"
+                params.append(start_month)
+
+            if end_month:
+                query += " AND fd_posting_month <= %s"
+                params.append(end_month)
+
+            query += " ORDER BY fd_posting_month DESC"
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                outbound_data.append({
+                    "posting_month": row['fd_posting_month'],
+                    "outbound_qty": row['fd_outbound_qty'] or 0,
+                    "outbound_count": row['fd_outbound_count'] or 0
+                })
+
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 获取历史出库数据失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return outbound_data
