@@ -428,7 +428,8 @@ class AllocationStreamService:
                         plan_type_val, strategy,
                         project_unit_val, demand_date,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        unit_factory_code, allocation_type, amount, unit_price
+                        unit_factory_code, allocation_type, amount, unit_price,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     ))
                 except Exception as e:
                     failed_count += 1
@@ -458,8 +459,8 @@ class AllocationStreamService:
                             fd_plan_type, fd_strategy,
                             fd_project_unit, fd_demand_time,
                             fd_create_time, fd_unit_factory_code, fd_allocation_type, fd_amount,
-                            fd_unit_price
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            fd_unit_price, fd_compare_date
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ''', batch_data)
                     
                     conn.commit()
