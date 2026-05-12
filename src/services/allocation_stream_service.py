@@ -605,6 +605,8 @@ class AllocationStreamService:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
         try:
             data = json.loads(chunk)
+            if isinstance(data, list):
+                return chunk
             choices = data.get('choices', [])
             if choices:
                 delta = choices[0].get('delta', {})
@@ -615,8 +617,9 @@ class AllocationStreamService:
                     return f"{reasoning}"
                 elif content:
                     return content
+            return None
         except json.JSONDecodeError:
-            return chunk.strip()
+            return chunk
         return None
 
     def _build_batch_prompt(self, all_plan_data: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
@@ -841,8 +844,6 @@ class AllocationStreamService:
                 placeholders = ','.join(['%s' for _ in material_codes])
                 query += f" AND fd_material_code IN ({placeholders})"
                 params.extend(material_codes)
-
-            query += " LIMIT 100"
 
             cur.execute(query, params)
             rows = cur.fetchall()

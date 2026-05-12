@@ -226,8 +226,8 @@ def analyze_inventory_item(inventory_item: dict) -> dict:
         分析结果，包含水位线和库存状态
     """
     # 获取基础数据
-    current_stock = float(inventory_item.get('current_stock', 0))
-    in_transit_stock = float(inventory_item.get('in_transit_stock', 0))
+    current_stock = float(inventory_item.get('current_stock') or 0)
+    in_transit_stock = float(inventory_item.get('in_transit_stock') or 0)
     available_stock = current_stock + in_transit_stock
     
     # 计算水位线
@@ -387,7 +387,7 @@ def solve_transportation_problem(sources: List[dict], destinations: List[dict]) 
         material_dests.sort(key=lambda x: x.get('demand_qty', 0), reverse=True)
         
         for dest in material_dests:
-            demand = float(dest.get('demand_qty', 0))
+            demand = float(dest.get('demand_qty') or 0)
             plan_id = dest.get('plan_id', '')
             
             if demand <= 0:
@@ -399,7 +399,7 @@ def solve_transportation_problem(sources: List[dict], destinations: List[dict]) 
                 if remaining_demand <= 0:
                     break
                 
-                stock = float(src.get('stock_qty', 0))
+                stock = float(src.get('stock_qty') or 0)
                 if stock <= 0:
                     continue
                 
@@ -412,9 +412,9 @@ def solve_transportation_problem(sources: List[dict], destinations: List[dict]) 
                     'source_location': src.get('location', ''),
                     'destination': dest.get('destination', ''),
                     'allocate_qty': float(allocate_qty),
-                    'distance': float(src.get('distance', 0)),
-                    'unit_cost': float(src.get('unit_cost', 0)),
-                    'total_cost': float(allocate_qty * src.get('unit_cost', 0))
+                    'distance': float(src.get('distance') or 0),
+                    'unit_cost': float(src.get('unit_cost') or 0),
+                    'total_cost': float(allocate_qty * (src.get('unit_cost') or 0))
                 })
                 
                 # 更新库存和需求
@@ -457,20 +457,20 @@ def analyze_allocation(plans_data: List[dict], stocks_data: List[dict], strategy
     sources = []
     for stock in stocks_data:
         sources.append({
-            'location': stock.get('loc_code', ''),
-            'material_code': stock.get('material_code', ''),
-            'stock_qty': float(stock.get('stock_qty', 0)),
-            'distance': float(stock.get('distance', 9999)),
-            'unit_cost': float(stock.get('unit_cost', 0))
+            'location': stock.get('loc_code', '') or '',
+            'material_code': stock.get('material_code', '') or '',
+            'stock_qty': float(stock.get('stock_qty') or 0),
+            'distance': float(stock.get('distance') or 9999),
+            'unit_cost': float(stock.get('unit_cost') or 0)
         })
     
     destinations = []
     for plan in plans_data:
         destinations.append({
-            'plan_id': plan.get('planId', plan.get('id', '')),
-            'material_code': plan.get('materialCode', ''),
-            'demand_qty': float(plan.get('demandQty', 0)),
-            'destination': plan.get('targetWarehouse', '')
+            'plan_id': plan.get('planId') or plan.get('id', ''),
+            'material_code': plan.get('materialCode') or '',
+            'demand_qty': float(plan.get('demandQty') or 0),
+            'destination': plan.get('targetWarehouse') or ''
         })
     
     # 根据策略调整权重

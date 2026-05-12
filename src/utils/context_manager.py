@@ -20,7 +20,7 @@ class ContextManager:
     """上下文管理器 - 处理超长prompt的代码沙盒"""
 
     # Token估算：1 token ≈ 4 个中文字符
-    TOKEN_LIMIT = 64000  # 64k token限制
+    TOKEN_LIMIT = 64  # 64k token限制
     TOKEN_PER_CHAR = 0.25  # 每个字符约0.25 token
     SAFETY_MARGIN = 0.8  # 安全边际，使用80%的token
 
@@ -122,47 +122,43 @@ class ContextManager:
         data = self._extract_data_from_prompt(prompt)
 
         # 第二步：执行代码计算（使用直接函数调用）
-        yield "\n🔢 [数据计算阶段] 正在使用代码沙盒进行数据计算...\n"
-        yield "────────────────────────────────────────\n"
-
+        yield "🔢 **[数据计算阶段] 正在使用代码沙盒进行数据计算...**\n"
         result = await self._execute_analysis_algorithm(data, data_type, original_data)
 
-        # 输出计算结果摘要
+        # 输出计算结果摘要（一次性拼接，让 \\n 保留在字符串中间不被 strip 吃掉）
         summary = result.get('summary', {})
         structured_data = result.get('results', [])
-        
-        yield f"\n📊 计算完成！\n"
-        yield f"  ├─ 处理记录数: {summary.get('total_items', summary.get('total_plans', 'N/A'))}\n"
+
+        summary_lines = []
+        summary_lines.append("")
+        summary_lines.append("📊 **计算完成**")
+        summary_lines.append(f"- 处理记录数: {summary.get('total_items', summary.get('total_plans', 'N/A'))}")
         
         if 'emergency_count' in summary:
-            yield f"  ├─ 紧急库存: {summary.get('emergency_count', 0)} 项\n"
-            yield f"  ├─ 低库存: {summary.get('low_count', 0)} 项\n"
-            yield f"  ├─ 正常库存: {summary.get('medium_count', 0)} 项\n"
-            yield f"  ├─ 高库存: {summary.get('high_count', 0)} 项\n"
-            yield f"  ├─ 库存充足: {summary.get('sufficient_count', 0)} 项\n"
+            summary_lines.append(f"- 紧急库存: {summary.get('emergency_count', 0)} 项")
+            summary_lines.append(f"- 低库存: {summary.get('low_count', 0)} 项")
+            summary_lines.append(f"- 正常库存: {summary.get('medium_count', 0)} 项")
+            summary_lines.append(f"- 高库存: {summary.get('high_count', 0)} 项")
+            summary_lines.append(f"- 库存充足: {summary.get('sufficient_count', 0)} 项")
         elif 'coverage_rate' in summary:
-            yield f"  ├─ 覆盖率: {summary.get('coverage_rate', 0) * 100:.1f}%\n"
-            yield f"  ├─ 总需求量: {summary.get('total_demand', 0)}\n"
-            yield f"  ├─ 已调配量: {summary.get('total_allocated', 0)}\n"
-            yield f"  ├─ 策略类型: {summary.get('strategy', 'time')}\n"
+            summary_lines.append(f"- 覆盖率: {summary.get('coverage_rate', 0) * 100:.1f}%")
+            summary_lines.append(f"- 总需求量: {summary.get('total_demand', 0)}")
+            summary_lines.append(f"- 已调配量: {summary.get('total_allocated', 0)}")
+            summary_lines.append(f"- 策略类型: {summary.get('strategy', 'time')}")
         elif 'matched_plans' in summary:
-            yield f"  ├─ 已匹配: {summary.get('matched_plans', 0)} 项\n"
-            yield f"  ├─ 部分匹配: {summary.get('partially_matched', 0)} 项\n"
-            yield f"  ├─ 未匹配: {summary.get('no_match', 0)} 项\n"
-            yield f"  ├─ 策略类型: {summary.get('strategy', 'balance')}\n"
+            summary_lines.append(f"- 已匹配: {summary.get('matched_plans', 0)} 项")
+            summary_lines.append(f"- 部分匹配: {summary.get('partially_matched', 0)} 项")
+            summary_lines.append(f"- 未匹配: {summary.get('no_match', 0)} 项")
+            summary_lines.append(f"- 策略类型: {summary.get('strategy', 'balance')}")
         
-        yield f"  └─ 计算状态: 成功\n\n"
+        summary_lines.append(f"- 计算状态: 成功")
+        summary_lines.append("")
 
-        # 输出结构化数据（可直接入库）
-        yield "📋 [结构化数据] 以下数据可直接入库：\n"
-        yield "────────────────────────────────────────\n"
-        yield "```json\n"
-        yield json.dumps(structured_data, ensure_ascii=False, indent=2)
-        yield "\n```\n\n"
+        yield "\n".join(summary_lines)
 
         # 第三步：让LLM基于计算摘要进行分析
-        yield "🤖 [分析总结阶段] 正在生成分析报告...\n"
         yield "────────────────────────────────────────\n"
+        yield "🤖 **[分析总结阶段] 正在生成分析报告...**\n"
 
         analysis_prompt = self._build_sandbox_analysis_prompt(prompt, result, original_data, data_type)
         async for chunk in self.llm_stream_func(analysis_prompt, system_prompt):
@@ -183,8 +179,17 @@ class ContextManager:
                 if not isinstance(inventory_data, list):
                     inventory_data = [inventory_data]
                 
+                # 归一化字段名：将服务层的中文/下划线字段名映射为 sandbox 函数期望的英文驼峰字段名
+                normalized_data = []
+                for item in inventory_data:
+                    normalized_item = dict(item)
+                    # '历史出库' → 'outbound_history'
+                    if '历史出库' in normalized_item and 'outbound_history' not in normalized_item:
+                        normalized_item['outbound_history'] = normalized_item.pop('历史出库')
+                    normalized_data.append(normalized_item)
+                
                 # 调用库存分析算法
-                result = batch_analyze_inventory(inventory_data)
+                result = batch_analyze_inventory(normalized_data)
                 
             elif data_type == 'allocation':
                 # 调配分析
@@ -198,8 +203,20 @@ class ContextManager:
                     stocks_data = original_data.get('stocks', stocks_data)
                     strategy = original_data.get('strategy', strategy)
                 
-                # 调用调配算法
-                result = analyze_allocation(plans_data, stocks_data, strategy)
+                # 归一化计划字段名：下划线 → 驼峰（sandbox 函数期望的格式）
+                normalized_plans = []
+                for p in plans_data:
+                    normalized_plans.append({
+                        'planId': p.get('planId') or p.get('plan_id', ''),
+                        'id': p.get('plan_id', ''),
+                        'materialCode': p.get('materialCode') or p.get('material_code', ''),
+                        'demandQty': p.get('demandQty') or p.get('demand_qty', 0),
+                        'targetWarehouse': p.get('targetWarehouse') or p.get('target_warehouse', ''),
+                        'materialDesc': p.get('materialDesc') or p.get('material_desc', ''),
+                    })
+                
+                # 调用调配算法（使用归一化后的数据）
+                result = analyze_allocation(normalized_plans, stocks_data, strategy)
                 
             elif data_type == 'supplier':
                 # 供应商匹配
@@ -213,8 +230,31 @@ class ContextManager:
                     suppliers_data = original_data.get('suppliers', suppliers_data)
                     strategy = original_data.get('strategy', strategy)
                 
-                # 调用供应商匹配算法
-                result = match_suppliers(plans_data, suppliers_data, strategy)
+                # 归一化计划字段名
+                normalized_plans = []
+                for p in plans_data:
+                    normalized_plans.append({
+                        'planId': p.get('planId') or p.get('plan_id', ''),
+                        'materialCode': p.get('materialCode') or p.get('material_code', ''),
+                        'demandQty': p.get('demandQty') or p.get('demand_qty', 0),
+                        'materialDesc': p.get('materialDesc') or p.get('material_desc', ''),
+                    })
+                
+                # 归一化供应商字段名：实际字段 → sandbox 函数期望的字段
+                normalized_suppliers = []
+                for s in suppliers_data:
+                    normalized_suppliers.append({
+                        'material_code': s.get('material_code', ''),
+                        'supplier_code': s.get('supplierCode') or s.get('supplier_code', ''),
+                        'supplier_name': s.get('supplierName') or s.get('supplier_name', ''),
+                        'price': float(s.get('unitPrice', 0) or 0),
+                        'available_qty': float(s.get('remainQty', 0) or 0),
+                        'delivery_days': int(s.get('deliveryDays', 30) or 30),
+                        'quality_score': float(s.get('qualityScore', 80) or 80),
+                    })
+                
+                # 调用供应商匹配算法（使用归一化后的数据）
+                result = match_suppliers(normalized_plans, normalized_suppliers, strategy)
                 
             else:
                 # 默认返回原始数据
@@ -254,97 +294,300 @@ class ContextManager:
 
     def _build_sandbox_analysis_prompt(self, original_prompt: str, calculation_result: Any, original_data: Dict[str, Any], data_type: str = 'inventory') -> str:
         """构建基于代码计算结果的分析prompt（不包含原始数据，只传递处理摘要）"""
-        # 提取分析要求
         analysis_requirements = self._extract_analysis_requirements(original_prompt)
+        agent_summary = self._get_agent_summary(data_type, calculation_result, original_data)
 
-        # 获取智能体信息摘要
-        agent_summary = self._get_agent_summary(data_type, calculation_result)
-
-        # 构建完整的prompt - 只传递处理摘要，不传递完整原始数据
         full_prompt = "## 智能体处理摘要\n\n"
         full_prompt += agent_summary
         full_prompt += "\n\n## 分析要求\n"
         full_prompt += analysis_requirements
-        full_prompt += "\n\n请基于以上处理摘要，进行深度分析并生成分析报告，包括：\n"
-        full_prompt += "- 数据摘要和关键指标\n"
-        full_prompt += "- 问题识别和风险评估\n"
-        full_prompt += "- 具体建议和优化方案\n"
-        full_prompt += "- 下一步行动计划\n"
+        full_prompt += "\n\n请严格基于以上提供的处理摘要中的数据和统计结果，撰写一份详尽的深度分析报告，报告结构如下：\n\n"
+        full_prompt += "### 1. 总体概况\n"
+        full_prompt += "用一段话高屋建瓴地概括本次分析的整体情况，说明分析背景、范围，并提炼最核心的发现。\n\n"
+        full_prompt += "### 2. 关键数据解读\n"
+        full_prompt += "对本次分析的各项关键指标进行详细解读，阐释每个指标的含义、数值分布情况，并结合业务场景说明其反映的实际问题。可以从以下维度展开：\n"
+        full_prompt += "- 整体数据分布特征（均值、极值、集中趋势等）\n"
+        full_prompt += "- 不同类别间的数据对比分析\n"
+        full_prompt += "- 数据异常点识别与成因分析\n"
+        full_prompt += "- 数据的动态变化趋势（如有历史数据可对比）\n"
+        full_prompt += "- 指标间的关联性分析\n\n"
+        full_prompt += "### 3. 明细数据及建议\n"
+        full_prompt += "用表格列出各条处理结果的详细数据和对应建议，表格格式参考（列名根据实际数据字段调整）：\n"
+        full_prompt += "| 序号 | 仓库 | 物料 | 关键指标 | 当前状态 | 建议操作 |\n"
+        full_prompt += "|------|------|------|----------|----------|----------|\n"
+        full_prompt += "表格中每行对应一条处理记录，关键指标根据数据类型展示水位线/覆盖率/评分等核心数值。\n\n"
+        full_prompt += "### 4. 重点关注与风险提示\n"
+        full_prompt += "详细标识出存在风险或需要紧急处理的记录，逐条说明风险等级、风险原因以及不及时处理的潜在后果。同时给出风险优先级排序，帮助决策者快速抓住重点。\n\n"
+        full_prompt += "### 5. 深层问题诊断\n"
+        full_prompt += "透过数据表象，深入分析可能存在的深层次问题，例如：\n"
+        full_prompt += "- 库存结构是否合理\n"
+        full_prompt += "- 调配方案是否存在效率瓶颈\n"
+        full_prompt += "- 供应链各环节是否存在衔接不畅\n"
+        full_prompt += "- 是否存在系统性风险或周期性波动规律\n\n"
+        full_prompt += "### 6. 优化建议与行动计划\n"
+        full_prompt += "将建议分为三个层级：\n"
+        full_prompt += "- **立即执行**：需要马上处理的事项（紧急补货、紧急调配等）\n"
+        full_prompt += "- **短期优化**：1-2周内可执行的改进措施\n"
+        full_prompt += "- **长期策略**：需要系统性和制度性优化的方向\n"
+        full_prompt += "每个建议应说明预期效果和可量化的改善目标。\n\n"
+        full_prompt += "### 7. 总结\n"
+        full_prompt += "用精炼的语言再次概括本次分析的核心结论和最重要的行动建议，强化报告的可执行性。\n\n"
+        full_prompt += "【注意】\n"
+        full_prompt += "- 请直接输出分析报告，不要输出原始数据或字段映射说明\n"
+        full_prompt += "- 尽可能展开分析，覆盖多个维度和角度\n"
+        full_prompt += "- 语言风格要保持专业性和逻辑性，确保读者能快速理解并采取行动"
 
         return full_prompt
 
-    def _get_agent_summary(self, data_type: str, calculation_result: Any) -> str:
-        """生成智能体处理摘要，不包含原始数据详情"""
+    def _get_agent_summary(self, data_type: str, calculation_result: Any, original_data: Dict[str, Any] = None) -> str:
+        """生成智能体处理摘要，包含字段映射和样例数据"""
         summary = calculation_result.get('summary', {})
-        
-        agent_info = {
+        results = None
+
+        # 定义各智能体的元信息
+        agent_meta = {
             'inventory': {
                 'name': '库存分析智能体',
-                'purpose': '基于历史出库数据计算水位线，判断库存状态，给出补货建议',
-                'algorithm': '统计分析算法（均值、中位数、标准差计算）',
-                'basis': '基于近12个月的出库历史数据，采用中位数法计算水位线：应急线=中位数×0.5，补库线=中位数×2，高位线=中位数×4',
-                'fields': '仓库编码、物料编码、当前库存、在途库存、水位线、库存状态、建议操作'
+                'purpose': '基于仓库物料的历史出库数据，智能计算库存水位线（应急线、补库线、高位线），评估库存健康状态，给出补货建议',
+                'data_source': 'mt_historical_outbound（历史出库表）、w_stock_info_0808（库存表）',
+                'field_mapping': [
+                    ('warehouse_code', '仓库编码', '仓库的唯一标识'),
+                    ('material_code', '物料编码', '物料的唯一标识'),
+                    ('tech_id', '技术规范ID', '物料的技术规格标识'),
+                    ('material_desc', '物料描述', '物料的名称/规格描述'),
+                    ('current_stock', '当前库存', '仓库中该物料的实时库存数量'),
+                    ('in_transit_stock', '在途库存', '已采购未到库的数量'),
+                    ('available_stock', '实际可用库存', '当前库存+在途库存'),
+                    ('历史出库', '历史出库数据', '过去N个月的月度出库记录，含月份和出库数量'),
+                ],
+                'output_fields': [
+                    ('emergency_line', '应急线', '库存最低安全线，低于此值必须紧急补货'),
+                    ('replenish_line', '补库线', '触发补货的水位线，低于此值应启动补库'),
+                    ('high_line', '高位线', '库存上限，高于此值无需补库可考虑利库'),
+                    ('stock_status', '库存状态', '紧急/低/中/高，表示当前库存健康程度'),
+                    ('suggested_action', '建议操作', '立即紧急补货/立即补货/建议补货/正常无需补货'),
+                    ('recommended_qty', '建议补货数量', '建议本次补货的数量（补库线-可用库存）'),
+                ],
+                'result_key': 'results',
+                'sample_fields': ['warehouse_code', 'material_code', 'material_desc', 'current_stock', 'in_transit_stock', 'available_stock', 'emergency_line', 'replenish_line', 'high_line', 'stock_status'],
+                'sample_labels': ['仓库编码', '物料编码', '物料描述', '当前库存', '在途库存', '可用库存', '应急线', '补库线', '高位线', '库存状态'],
             },
             'allocation': {
                 'name': '库存调配智能体',
-                'purpose': '多仓库间物料最优调配，满足需求同时最小化成本或时间',
-                'algorithm': '运输问题贪心算法，支持时间优先、成本优先、均衡策略三种策略',
-                'basis': '基于仓库库存数据和计划需求数据，采用贪心算法进行最优调配',
-                'fields': '计划ID、物料编码、仓库编码、调配数量、来源仓库、目标仓库、状态'
+                'purpose': '多仓库间物料最优调配，基于需求计划和库存数据，为每个计划匹配最优仓库，综合考虑距离、成本等因素',
+                'data_source': 'mt_stock_use_list_plan_two（需求计划表）、w_stock_info_0808（库存表）',
+                'field_mapping': [
+                    ('plan_id', '计划ID', '需求计划的唯一标识'),
+                    ('material_code', '物料编码', '物料唯一标识'),
+                    ('material_desc', '物料描述', '物料名称/规格'),
+                    ('demand_qty', '需求数量', '本次计划的需求量'),
+                    ('target_warehouse', '目标仓库', '需求方指定的目标仓库'),
+                    ('matching_stocks', '可匹配库存', '该物料在备选仓库中的库存列表，含仓库编码、库存数量、距离'),
+                ],
+                'output_fields': [
+                    ('source_location', '来源仓库', '实际调配出货的仓库编码'),
+                    ('allocate_qty', '调配数量', '从该仓库调出的数量'),
+                    ('distance', '距离(km)', '来源仓库到目标仓库的距离'),
+                    ('total_cost', '运输成本', '本次调配的运输成本'),
+                    ('status', '匹配状态', '完全匹配/部分匹配/未满足'),
+                ],
+                'result_key': 'allocation_results',
+                'sample_fields': ['plan_id', 'material_code', 'source_location', 'destination', 'allocate_qty', 'distance'],
+                'sample_labels': ['计划ID', '物料编码', '来源仓库', '目标仓库', '调配数量', '距离(km)'],
             },
             'supplier': {
                 'name': '供应商匹配智能体',
-                'purpose': '多对多供应商匹配，优化执行比例，实现均衡分配',
-                'algorithm': '多目标评分模型（价格40%、交付30%、质量30%）+ 均衡分配策略',
-                'basis': '基于供应商历史表现评分，实现最优匹配和均衡分配，最多选择3个供应商',
-                'fields': '计划ID、物料编码、供应商编码、匹配分数、单价、交期、执行比例'
-            }
+                'purpose': '为补货计划智能匹配最优供应商，基于协议价格、执行比例、剩余可用数量等因素，提供均衡、成本、配送三种策略方案',
+                'data_source': 'mt_replenishment_plan（补货计划表）、mt_framework_agreement（框架协议表）',
+                'field_mapping': [
+                    ('plan_id', '计划ID', '补货计划的唯一标识'),
+                    ('material_code', '物料编码', '物料唯一标识'),
+                    ('material_desc', '物料描述', '物料名称/规格'),
+                    ('demand_qty', '需求数量', '本次补货的需求量'),
+                    ('company', '所属单位', '计划所属的项目单位'),
+                ],
+                'supplier_fields': [
+                    ('supplierCode', '供应商编码', '供应商的唯一标识'),
+                    ('supplierName', '供应商名称', '供应商名称'),
+                    ('executionRate', '执行比例(%)', '该供应商已执行的协议比例'),
+                    ('remainQty', '剩余可用数量', '该供应商剩余可用的协议数量'),
+                    ('unitPrice', '协议单价', '该供应商的协议单价'),
+                ],
+                'output_fields': [
+                    ('supplier_name', '供应商名称', '匹配的供应商名称'),
+                    ('price', '协议单价', '该供应商的协议单价'),
+                    ('score', '匹配评分', '综合评分（0-1），越高越优'),
+                    ('allocation_qty', '分配数量', '分配给该供应商的数量'),
+                    ('allocation_ratio', '分配比例(%)', '分配给该供应商的比例'),
+                ],
+                'result_key': 'match_results',
+                'sample_fields': ['plan_id', 'material_code', 'demand_qty', 'suppliers', 'status'],
+                'sample_labels': ['计划ID', '物料编码', '需求数量', '匹配供应商列表', '状态'],
+            },
         }
-        
-        info = agent_info.get(data_type, agent_info['inventory'])
-        
-        # 构建详细摘要
-        result = f"### 智能体信息\n\n"
-        result += f"- **智能体名称**: {info['name']}\n"
-        result += f"- **核心目的**: {info['purpose']}\n"
-        result += f"- **使用算法**: {info['algorithm']}\n"
-        result += f"- **计算依据**: {info['basis']}\n"
-        result += f"- **输出字段**: {info['fields']}\n\n"
-        
-        # 添加处理统计
-        result += "### 处理统计\n\n"
-        if 'total_items' in summary:
-            result += f"- 处理记录数: {summary.get('total_items', 0)} 条\n"
-        elif 'total_plans' in summary:
-            result += f"- 处理计划数: {summary.get('total_plans', 0)} 条\n"
-        
-        # 根据数据类型添加特定统计
+
+        info = agent_meta.get(data_type, agent_meta['inventory'])
+        result_key = info.get('result_key', 'results')
+
+        # 从 calculation_result 中获取 results 列表
+        if result_key == 'allocation_results':
+            results = calculation_result.get(result_key, [])
+        elif result_key == 'match_results':
+            results = calculation_result.get(result_key, [])
+        else:
+            results = calculation_result.get(result_key, [])
+
+        # === 第一部分：智能体身份 ===
+        text = f"### 1. 智能体身份\n\n"
+        text += f"- **名称**: {info['name']}\n"
+        text += f"- **核心目的**: {info['purpose']}\n"
+        text += f"- **数据来源**: {info['data_source']}\n\n"
+
+        # === 第二部分：数据处理概况 ===
+        text += "### 2. 数据处理概况\n\n"
+        text += f"本次分析共处理 **{summary.get('total_items', summary.get('total_plans', 0))}** 条记录。\n\n"
+
         if data_type == 'inventory':
-            result += f"- 紧急库存: {summary.get('emergency_count', 0)} 项\n"
-            result += f"- 低库存: {summary.get('low_count', 0)} 项\n"
-            result += f"- 正常库存: {summary.get('medium_count', 0)} 项\n"
-            result += f"- 高库存: {summary.get('high_count', 0)} 项\n"
-            result += f"- 库存充足: {summary.get('sufficient_count', 0)} 项\n"
-            
+            text += "| 指标 | 数值 |\n"
+            text += "|------|------|\n"
+            text += f"| 总处理组合数 | {summary.get('total_items', 0)} |\n"
+            text += f"| 当前库存总量 | {summary.get('total_current_stock', 0):.1f} |\n"
+            text += f"| 在途库存总量 | {summary.get('total_in_transit', 0):.1f} |\n"
+            text += f"| 可用库存总量 | {summary.get('total_available', 0):.1f} |\n"
+            text += f"| 建议补货总量 | {summary.get('total_recommended_qty', 0):.1f} |\n"
+            text += f"| 🔴 紧急库存 | {summary.get('emergency_count', 0)} 项 |\n"
+            text += f"| 🟠 低库存 | {summary.get('low_count', 0)} 项 |\n"
+            text += f"| 🟡 正常库存 | {summary.get('medium_count', 0)} 项 |\n"
+            text += f"| 🟢 高库存 | {summary.get('high_count', 0)} 项 |\n\n"
         elif data_type == 'allocation':
-            result += f"- 总需求量: {summary.get('total_demand', 0)}\n"
-            result += f"- 已调配量: {summary.get('total_allocated', 0)}\n"
-            result += f"- 覆盖率: {summary.get('coverage_rate', 0) * 100:.1f}%\n"
-            result += f"- 策略类型: {summary.get('strategy', 'time')}\n"
-            
+            text += "| 指标 | 数值 |\n"
+            text += "|------|------|\n"
+            text += f"| 总计划数 | {summary.get('total_plans', 0)} |\n"
+            text += f"| 物料种类数 | {summary.get('total_materials', 0)} |\n"
+            text += f"| 总需求量 | {summary.get('total_demand', 0):.1f} |\n"
+            text += f"| 已调配量 | {summary.get('total_allocated', 0):.1f} |\n"
+            text += f"| 覆盖率 | {summary.get('coverage_rate', 0)*100:.1f}% |\n"
+            text += f"| 总运输成本 | {summary.get('total_cost', 0):.2f} |\n"
+            match_summary = calculation_result.get('match_summary', {})
+            text += f"| ✅ 完全匹配 | {match_summary.get('fully_matched', 0)} 个 |\n"
+            text += f"| ⚠️ 部分匹配 | {match_summary.get('partially_matched', 0)} 个 |\n"
+            text += f"| ❌ 无匹配 | {match_summary.get('no_match', 0)} 个 |\n"
+            text += f"| 策略类型 | {summary.get('strategy', 'time')} |\n\n"
         elif data_type == 'supplier':
-            result += f"- 已匹配: {summary.get('matched_plans', 0)} 项\n"
-            result += f"- 部分匹配: {summary.get('partially_matched', 0)} 项\n"
-            result += f"- 未匹配: {summary.get('no_match', 0)} 项\n"
-            result += f"- 策略类型: {summary.get('strategy', 'balance')}\n"
-        
-        # 添加计算状态
-        result += f"\n### 计算状态\n\n"
-        result += f"- 计算结果: 成功\n"
-        if 'error' in summary:
-            result += f"- 错误信息: {summary.get('error')}\n"
-        
-        return result
+            text += "| 指标 | 数值 |\n"
+            text += "|------|------|\n"
+            text += f"| 总计划数 | {summary.get('total_plans', 0)} |\n"
+            text += f"| ✅ 已匹配 | {summary.get('matched_plans', 0)} 个 |\n"
+            text += f"| ⚠️ 部分匹配 | {summary.get('partially_matched', 0)} 个 |\n"
+            text += f"| ❌ 无匹配 | {summary.get('no_match', 0)} 个 |\n"
+            text += f"| 总需求量 | {summary.get('total_demand', 0):.1f} |\n"
+            text += f"| 已分配量 | {summary.get('total_allocated', 0):.1f} |\n"
+            text += f"| 覆盖率 | {summary.get('coverage_rate', 0)*100:.1f}% |\n"
+            text += f"| 平均供应商评分 | {summary.get('avg_supplier_score', 0):.3f} |\n"
+            text += f"| 策略类型 | {summary.get('strategy', 'balance')} |\n\n"
+
+        # === 第三部分：字段映射说明 ===
+        text += "### 3. 字段说明\n\n"
+        text += "#### 3.1 输入字段（从原始数据提取）\n\n"
+        text += "| 字段名 | 中文含义 | 说明 |\n"
+        text += "|--------|----------|------|\n"
+        for field_name, label, desc in info.get('field_mapping', []):
+            text += f"| `{field_name}` | {label} | {desc} |\n"
+
+        if data_type == 'supplier':
+            text += "\n#### 供应商数据字段\n\n"
+            text += "| 字段名 | 中文含义 | 说明 |\n"
+            text += "|--------|----------|------|\n"
+            for field_name, label, desc in info.get('supplier_fields', []):
+                text += f"| `{field_name}` | {label} | {desc} |\n"
+
+        text += "\n#### 3.2 输出字段（算法计算结果）\n\n"
+        text += "| 字段名 | 中文含义 | 说明 |\n"
+        text += "|--------|----------|------|\n"
+        for field_name, label, desc in info.get('output_fields', []):
+            text += f"| `{field_name}` | {label} | {desc} |\n"
+
+        # === 第四部分：样例数据 ===
+        text += "\n### 4. 数据样例\n\n"
+        text += f"以下是处理结果中的前 {min(3, len(results))} 条数据样例（共 {len(results)} 条）：\n\n"
+
+        if data_type == 'inventory':
+            for i, item in enumerate(results[:3], 1):
+                text += f"#### 样例 {i}：{item.get('warehouse_code', '')} × {item.get('material_code', '')}\n\n"
+                text += "| 字段 | 值 |\n"
+                text += "|------|------|\n"
+                text += f"| 仓库编码 | {item.get('warehouse_code', '')} |\n"
+                text += f"| 仓库名称 | {item.get('warehouse_name', '')} |\n"
+                text += f"| 物料编码 | {item.get('material_code', '')} |\n"
+                text += f"| 技术规范ID | {item.get('tech_id', '')} |\n"
+                text += f"| 物料描述 | {item.get('material_desc', '')} |\n"
+                text += f"| 当前库存 | {item.get('current_stock', 0)} |\n"
+                text += f"| 在途库存 | {item.get('in_transit_stock', 0)} |\n"
+                text += f"| 可用库存 | {item.get('available_stock', 0)} |\n"
+                text += f"| 🔴 应急线 | {item.get('emergency_line', 0):.2f} |\n"
+                text += f"| 🟠 补库线 | {item.get('replenish_line', 0):.2f} |\n"
+                text += f"| 🟢 高位线 | {item.get('high_line', 0):.2f} |\n"
+                text += f"| 库存状态 | **{item.get('stock_status', '')}** |\n"
+                text += f"| 建议操作 | {item.get('suggested_action', '')} |\n"
+                text += f"| 建议补货数量 | {item.get('recommended_qty', 0):.2f} |\n\n"
+
+                stats = item.get('statistics', {})
+                text += "历史消耗统计：\n\n"
+                text += f"- 月均出库: {stats.get('avg_outbound', 0):.2f}\n"
+                text += f"- 中位数出库: {stats.get('median_outbound', 0):.2f}\n"
+                text += f"- 标准差: {stats.get('std_outbound', 0):.2f}\n"
+                text += f"- 消耗趋势: {stats.get('trend', '平稳')}\n"
+                text += f"- 波动特征: {stats.get('seasonality', '稳定')}\n\n"
+
+        elif data_type == 'allocation':
+            # 按 plan_id 分组展示
+            plan_groups = {}
+            for item in results:
+                pid = item.get('plan_id', '')
+                if pid not in plan_groups:
+                    plan_groups[pid] = []
+                plan_groups[pid].append(item)
+
+            for i, (pid, items) in enumerate(list(plan_groups.items())[:3], 1):
+                text += f"#### 样例 {i}：计划 {pid}\n\n"
+                successful = [it for it in items if it.get('source_location')]
+                unmet = [it for it in items if it.get('status') == '未满足']
+
+                if successful:
+                    text += "**调配方案：**\n\n"
+                    text += "| 来源仓库 | 目标仓库 | 调配数量 | 距离(km) | 运输成本 |\n"
+                    text += "|----------|----------|----------|----------|----------|\n"
+                    for it in successful[:3]:
+                        text += f"| {it.get('source_location', '')} | {it.get('destination', '')} | {it.get('allocate_qty', 0):.1f} | {it.get('distance', 0):.1f} | {it.get('total_cost', 0):.2f} |\n"
+
+                if unmet:
+                    text += f"\n**未满足需求：** {unmet[0].get('unmet_demand', 0):.1f} 个单位\n"
+                text += "\n"
+
+        elif data_type == 'supplier':
+            for i, item in enumerate(results[:3], 1):
+                text += f"#### 样例 {i}：计划 {item.get('plan_id', '')}（物料 {item.get('material_code', '')}）\n\n"
+                text += f"- 需求数量: {item.get('demand_qty', 0)}\n"
+                text += f"- 匹配状态: **{item.get('status', '')}**\n"
+                if item.get('unmet_qty', 0) > 0:
+                    text += f"- 未满足数量: {item.get('unmet_qty', 0)}\n"
+
+                suppliers = item.get('suppliers', [])
+                if suppliers:
+                    text += "\n**匹配供应商：**\n\n"
+                    text += "| 供应商名称 | 协议单价 | 匹配评分 | 分配数量 | 分配比例 |\n"
+                    text += "|------------|----------|----------|----------|----------|\n"
+                    for s in suppliers[:3]:
+                        text += f"| {s.get('supplier_name', '')} | {s.get('price', 0):.2f} | {s.get('score', 0):.3f} | {s.get('allocation_qty', 0):.1f} | {s.get('allocation_ratio', 0)*100:.1f}% |\n"
+                text += "\n"
+
+        # === 第五部分：补充说明 ===
+        text += "### 5. 补充说明\n\n"
+        text += "- 以上数据均由算法计算得出，数据真实可靠\n"
+        text += "- 水位线/调配方案/匹配结果可直接用于决策参考\n"
+        text += "- 如需查看完整数据，请参考前文输出的JSON结构化数据\n"
+
+        return text
 
     def _get_json_template(self, data_type: str) -> str:
         """根据数据类型返回对应的JSON模板（与原智能体期望格式一致）"""

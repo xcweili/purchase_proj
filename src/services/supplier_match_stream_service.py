@@ -188,6 +188,7 @@ class SupplierMatchStreamService:
 
                 for s in suppliers:
                     s['plan_id'] = plan_id
+                    s['material_code'] = material_code
                     all_suppliers.append(s)
 
                 match_status = "✅ 有供应商" if suppliers else "❌ 无供应商"
@@ -599,10 +600,11 @@ class SupplierMatchStreamService:
                     return f"{reasoning}"
                 elif content:
                     return content
+            return None
         except json.JSONDecodeError:
             # 如果不是有效JSON，直接返回原始字符串
             if isinstance(chunk, str):
-                return chunk.strip()
+                return chunk
         return None
 
     def _build_batch_prompt(self, all_plan_data: List[Dict[str, Any]], all_suppliers: List[Dict[str, Any]]) -> str:
@@ -781,7 +783,6 @@ class SupplierMatchStreamService:
                 FROM mt_replenishment_plan
                 WHERE fd_deleted = 0
                 ORDER BY id
-                LIMIT 100
             ''')
             rows = cur.fetchall()
 

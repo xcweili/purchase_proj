@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """采购管理智能体服务 - 主入口"""
 import json
+import os
 import logging
 import sqlite3
 import asyncio
@@ -13,6 +14,31 @@ from typing import List, Dict, Any, Optional
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# 模拟返回配置
+# ============================================
+MOCK_RESPONSE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "接口协议", "模拟返回")
+MOCK_FILES = {
+    "allocation": os.path.join(MOCK_RESPONSE_DIR, "智能调配.md"),
+    "inventory": os.path.join(MOCK_RESPONSE_DIR, "库存分析.md"),
+    "supplier": os.path.join(MOCK_RESPONSE_DIR, "供应商匹配.md"),
+}
+
+async def mock_response_generator(agent_type: str):
+    """读取模拟返回文件并逐字返回"""
+    file_path = MOCK_FILES.get(agent_type)
+    if not file_path or not os.path.exists(file_path):
+        yield f"❌ 未找到 {agent_type} 的模拟返回文件\n"
+        return
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    for char in content:
+        yield char
+        await asyncio.sleep(0.005)
+
 app = FastAPI(title="采购管理智能体服务", version="10.0")
 
 app.add_middleware(
@@ -55,6 +81,7 @@ class AllocationMatchRequest(BaseModel):
     planType: str = Field(default="", description="计划类型")
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
     analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMM）")
@@ -64,10 +91,12 @@ class InventoryAnalysisRequest(BaseModel):
     seasonFactorWeight: Optional[float] = Field(default=None, description="季节因子权重")
     safetyRedundancyRatio: Optional[float] = Field(default=None, description="安全冗余比例")
     analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class SupplierMatchRequest(BaseModel):
     plans: Optional[List[Dict[str, Any]]] = Field(default=None, description="补货计划列表")
     analyzeMode: str = Field(default="batch", description="分析模式：batch（批量）/iterative（迭代）")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
@@ -91,6 +120,21 @@ async def allocation_match_stream(request: AllocationMatchRequest):
     # 创建会话
     session_id = session_manager.create_session("allocation")
     strategy_val = request.strategy if request.strategy else "time"
+
+    if request.mock:
+        logger.info(f"[AllocationStream] 使用模拟返回模式")
+        return StreamingResponse(
+            mock_response_generator("allocation"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked",
+                "X-Session-Id": session_id
+            }
+        )
 
     async def response_generator():
         try:
@@ -150,6 +194,21 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     # 创建会话
     session_id = session_manager.create_session("inventory")
 
+    if request.mock:
+        logger.info(f"[InventoryStream] 使用模拟返回模式")
+        return StreamingResponse(
+            mock_response_generator("inventory"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked",
+                "X-Session-Id": session_id
+            }
+        )
+
     async def response_generator():
         try:
             async for chunk in inventory_analysis_stream_service.stream_analyze(
@@ -199,6 +258,21 @@ async def supplier_match_stream(request: SupplierMatchRequest):
 
     # 创建会话
     session_id = session_manager.create_session("supplier")
+
+    if request.mock:
+        logger.info(f"[SupplierStream] 使用模拟返回模式")
+        return StreamingResponse(
+            mock_response_generator("supplier"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked",
+                "X-Session-Id": session_id
+            }
+        )
 
     async def response_generator():
         try:

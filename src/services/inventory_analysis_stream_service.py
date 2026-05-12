@@ -325,6 +325,7 @@ class InventoryAnalysisStreamService:
 
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                logger.info("prompt过长, 启用分层推理模式")
                 async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'inventory', all_combo_data):
                     # 检查会话是否已取消
                     if session_id and session_manager.is_session_cancelled(session_id):
@@ -713,6 +714,7 @@ class InventoryAnalysisStreamService:
 
                 if self.context_manager and self.context_manager.is_too_long(prompt):
                     yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
+                    logger.info("prompt过长, 启用分层推理模式")
                     async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'inventory', all_combo_data):
                         content = self._parse_llm_chunk(chunk)
                         if content:
@@ -831,6 +833,9 @@ class InventoryAnalysisStreamService:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
         try:
             data = json.loads(chunk)
+            # 如果是列表，透传（如沙盒模式的结构化数据）
+            if isinstance(data, list):
+                return chunk
             choices = data.get('choices', [])
             if choices:
                 delta = choices[0].get('delta', {})
@@ -841,8 +846,9 @@ class InventoryAnalysisStreamService:
                     return f"{reasoning}"
                 elif content:
                     return content
+            return None
         except json.JSONDecodeError:
-            return chunk.strip()
+            return chunk
         return None
 
     def _build_batch_prompt(self, all_combo_data: List[Dict[str, Any]], start_date: str, end_date: str) -> str:
