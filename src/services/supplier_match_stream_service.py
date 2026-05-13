@@ -24,12 +24,10 @@ class SupplierMatchStreamService:
         else:
             self.context_manager = None
 
-    async def stream_analyze(self, input_plans: List[Dict[str, Any]] = None, analyze_mode: str = "batch", session_id: str = None):
+    async def stream_analyze(self, session_id: str = None):
         """流式分析供应商匹配
 
         Args:
-            input_plans: 输入的补货计划列表，如果为None则从数据库查询
-            analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
             session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
@@ -39,39 +37,25 @@ class SupplierMatchStreamService:
         yield "   为每个补货计划精准匹配最优供应商，实现采购成本最小化和供应链效率最大化。\n"
         yield "   核心目标：优化供应商结构、降低采购成本、保障供应稳定性。\n\n"
         
-        logger.info(f"开始流式供应商匹配分析, input_plans_count={len(input_plans) if input_plans else 0}, "
-                    f"analyze_mode={analyze_mode}")
-        
         try:
             yield "🔍 【阶段一：补货计划数据采集】\n"
             yield "   📌 当前需求：获取需要进行供应商匹配的补货计划\n"
-            yield "   📌 执行动作：从外部输入或数据库查询补货计划数据\n"
+            yield "   📌 执行动作：从数据库查询补货计划数据\n"
             yield "   📌 数据用途：补货计划是供应商匹配的核心输入，包含物料编码、需求数量、目标仓库等关键信息\n"
-            yield "   📌 数据来源：\n"
-            yield "      • 外部输入：用户提供的补货计划列表\n"
-            yield "      • 数据库查询：从补货计划表获取待处理计划\n"
+            yield "   📌 数据来源：从补货计划表获取待处理计划\n"
             yield "   └─ 正在执行补货计划数据检索...\n"
-            if input_plans and len(input_plans) > 0:
-                yield "   └─ 数据来源：使用外部输入的补货计划数据\n"
-                plans = input_plans
-                yield f"✅ 补货计划数据采集成功\n"
-                yield f"   └─ 共获取 {len(plans)} 条输入计划\n"
-                yield f"   └─ 数据完整性：已验证所有必需字段\n"
-                yield f"   └─ 下一步：查询供应商协议数据\n\n"
-                logger.info(f"使用外部输入计划, count={len(plans)}")
-            else:
-                yield "   └─ 数据来源：从数据库智能检索补货计划\n"
-                logger.info("正在从数据库查询补货计划...")
-                try:
-                    plans = await asyncio.wait_for(
-                        self._query_plans(),
-                        timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    yield "❌ 补货计划查询超时：数据库响应超过30秒\n"
-                    yield "   💡 建议：请检查数据库连接状态\n"
-                    return
-                logger.info(f"从数据库获取补货计划, count={len(plans)}")
+            yield "   └─ 数据来源：从数据库智能检索补货计划\n"
+            logger.info("正在从数据库查询补货计划...")
+            try:
+                plans = await asyncio.wait_for(
+                    self._query_plans(),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                yield "❌ 补货计划查询超时：数据库响应超过30秒\n"
+                yield "   💡 建议：请检查数据库连接状态\n"
+                return
+            logger.info(f"从数据库获取补货计划, count={len(plans)}")
 
             if not plans:
                 yield "❌ 补货计划数据采集失败：未查询到补货计划\n"
@@ -83,29 +67,19 @@ class SupplierMatchStreamService:
                 yield "❌ 【会话已终止】用户已取消当前分析任务\n"
                 return
 
-            if analyze_mode == "batch":
-                yield "⚡ 【阶段二：AI智能批量匹配】\n"
-                yield "   📌 当前需求：对所有补货计划进行一次性深度智能匹配分析\n"
-                yield "   📌 执行动作：启动大规模并行匹配引擎，运用智能匹配算法\n"
-                yield "   📌 匹配目标：\n"
-                yield "      • 供应商优选：为每个计划选择最优供应商\n"
-                yield "      • 多策略分析：提供均衡、成本、配送三种策略方案\n"
-                yield "      • 执行比例优化：优化供应商执行比例，实现均衡发展\n"
-                yield "   📌 技术架构：多目标优化 + 规则引擎 + 决策树\n"
-                yield "   └─ 正在启动AI匹配引擎...\n"
-                yield "   └─ 预计分析时间：取决于计划数量和供应商数据规模\n\n"
-                logger.info(f"启动批量供应商匹配, plans={len(plans)}")
-                async for chunk in self._batch_analyze(plans, session_id):
-                    yield chunk
-            else:
-                yield "🔄 【阶段二：AI迭代匹配】\n"
-                yield "   📌 当前需求：对每个补货计划依次进行独立匹配分析\n"
-                yield "   📌 执行动作：启动迭代匹配模式，逐个处理计划\n"
-                yield "   📌 匹配特点：适合计划数量较大或需要实时反馈的场景\n"
-                yield "   └─ 正在启动迭代匹配...\n\n"
-                logger.info(f"启动迭代供应商匹配, plans={len(plans)}")
-                async for chunk in self._iterative_analyze(plans, session_id):
-                    yield chunk
+            yield "⚡ 【阶段二：AI智能批量匹配】\n"
+            yield "   📌 当前需求：对所有补货计划进行一次性深度智能匹配分析\n"
+            yield "   📌 执行动作：启动大规模并行匹配引擎，运用智能匹配算法\n"
+            yield "   📌 匹配目标：\n"
+            yield "      • 供应商优选：为每个计划选择最优供应商\n"
+            yield "      • 多策略分析：提供均衡、成本、配送三种策略方案\n"
+            yield "      • 执行比例优化：优化供应商执行比例，实现均衡发展\n"
+            yield "   📌 技术架构：多目标优化 + 规则引擎 + 决策树\n"
+            yield "   └─ 正在启动AI匹配引擎...\n"
+            yield "   └─ 预计分析时间：取决于计划数量和供应商数据规模\n\n"
+            logger.info(f"启动批量供应商匹配, plans={len(plans)}")
+            async for chunk in self._batch_analyze(plans, session_id):
+                yield chunk
 
         except Exception as e:
             yield f"❌ 系统异常：分析过程中发生错误\n"
@@ -182,7 +156,8 @@ class SupplierMatchStreamService:
                     'company': company or '',
                     'project_def': plan.get('projectDef', ''),
                     'project_desc': plan.get('projectDesc', ''),
-                    'suppliers': suppliers
+                    'suppliers': suppliers,
+                    'unit': plan.get('unit', '') or plan.get('fd_unit', '') or ''
                 }
                 all_plan_data.append(plan_data)
 
@@ -311,6 +286,8 @@ class SupplierMatchStreamService:
                     tech_spec_id = result_data.get('techSpecId', '') or plan_data.get('techSpecId', '') or plan_data.get('tech_spec_id', '') or plan_data.get('fd_spec_doc_id', '')
                     amount = result_data.get('amount', 0) or (demand_qty * unit_price)
                     
+                    unit = plan_data.get('unit', '') or ''
+
                     if suppliers:
                         # 构建三种策略的匹配结果
                         # 1. 均衡策略：优先选择执行比例较低的供应商
@@ -318,12 +295,10 @@ class SupplierMatchStreamService:
                         balanced_total_cost = sum(float(s.get('unitPrice', 0) or 0) * float(s.get('remainQty', 0) or 0) for s in balanced_suppliers)
                         balanced_allocated = sum(float(s.get('remainQty', 0) or 0) for s in balanced_suppliers)
                         balanced_unmet = max(0, demand_qty - balanced_allocated)
-                        balanced_supplier_names = ','.join([s.get('supplierName', '') for s in balanced_suppliers])
-                        # 计算第一条供应商的成本
-                        balanced_first_unit_price = float(balanced_suppliers[0].get('unitPrice', 0) or 0) if balanced_suppliers else 0
-                        balanced_first_allocated = float(balanced_suppliers[0].get('remainQty', 0) or 0) if balanced_suppliers else 0
+                        balanced_first = balanced_suppliers[0] if balanced_suppliers else {}
+                        balanced_first_unit_price = float(balanced_first.get('unitPrice', 0) or 0)
+                        balanced_first_allocated = float(balanced_first.get('remainQty', 0) or 0)
                         balanced_first_cost = balanced_first_unit_price * balanced_first_allocated
-                        # 判断匹配状态
                         balanced_status = '成功' if balanced_unmet == 0 else '部分匹配'
                         
                         # 2. 成本策略：优先选择单价最低的供应商
@@ -331,12 +306,10 @@ class SupplierMatchStreamService:
                         cost_total_cost = sum(float(s.get('unitPrice', 0) or 0) * float(s.get('remainQty', 0) or 0) for s in cost_suppliers)
                         cost_allocated = sum(float(s.get('remainQty', 0) or 0) for s in cost_suppliers)
                         cost_unmet = max(0, demand_qty - cost_allocated)
-                        cost_supplier_names = ','.join([s.get('supplierName', '') for s in cost_suppliers])
-                        # 计算第一条供应商的成本
-                        cost_first_unit_price = float(cost_suppliers[0].get('unitPrice', 0) or 0) if cost_suppliers else 0
-                        cost_first_allocated = float(cost_suppliers[0].get('remainQty', 0) or 0) if cost_suppliers else 0
+                        cost_first = cost_suppliers[0] if cost_suppliers else {}
+                        cost_first_unit_price = float(cost_first.get('unitPrice', 0) or 0)
+                        cost_first_allocated = float(cost_first.get('remainQty', 0) or 0)
                         cost_first_cost = cost_first_unit_price * cost_first_allocated
-                        # 判断匹配状态
                         cost_status = '成功' if cost_unmet == 0 else '部分匹配'
                         
                         # 3. 配送策略：优先选择能满足全部需求的单个供应商
@@ -346,69 +319,59 @@ class SupplierMatchStreamService:
                         delivery_total_cost = sum(float(s.get('unitPrice', 0) or 0) * float(s.get('remainQty', 0) or 0) for s in delivery_suppliers)
                         delivery_allocated = sum(float(s.get('remainQty', 0) or 0) for s in delivery_suppliers)
                         delivery_unmet = max(0, demand_qty - delivery_allocated)
-                        delivery_supplier_names = ','.join([s.get('supplierName', '') for s in delivery_suppliers])
-                        # 计算第一条供应商的成本
-                        delivery_first_unit_price = float(delivery_suppliers[0].get('unitPrice', 0) or 0) if delivery_suppliers else 0
-                        delivery_first_allocated = float(delivery_suppliers[0].get('remainQty', 0) or 0) if delivery_suppliers else 0
+                        delivery_first = delivery_suppliers[0] if delivery_suppliers else {}
+                        delivery_first_unit_price = float(delivery_first.get('unitPrice', 0) or 0)
+                        delivery_first_allocated = float(delivery_first.get('remainQty', 0) or 0)
                         delivery_first_cost = delivery_first_unit_price * delivery_first_allocated
-                        # 判断匹配状态
                         delivery_status = '成功' if delivery_unmet == 0 else '部分匹配'
                         
-                        # 添加三种策略的数据
-                        batch_data.extend([
-                            (
-                                plan_id, material_code, material_desc, balanced_status, 'balanced',
+                        def make_supplier_tuple(sc, first_sup, sup_list, st, alloc_tot, tot_cost, unmet, f_price, f_qty, f_cost):
+                            sup = first_sup or {}
+                            alloc_rate_val = float(sup.get('allocRate', 0) or 0)
+                            exec_rate_val = float(sup.get('executionRate', 0) or 0)
+                            return (
+                                plan_id, material_code, material_desc, st, sc,
                                 company, project_def, project_desc,
                                 demand_qty, tech_spec_id,
-                                json.dumps(balanced_suppliers, ensure_ascii=False), balanced_total_cost, balanced_unmet,
+                                json.dumps(sup_list, ensure_ascii=False), tot_cost, unmet,
                                 current_time, current_time,
-                                balanced_suppliers[0].get('supplierCode', '') if balanced_suppliers else '',
-                                balanced_suppliers[0].get('supplierName', '') if balanced_suppliers else '',
-                                balanced_allocated,
-                                balanced_first_unit_price,
-                                balanced_first_cost,
-                                float(balanced_suppliers[0].get('executionRate', 0) or 0) if balanced_suppliers else 0,
-                                float(balanced_suppliers[0].get('remainQty', 0) or 0) if balanced_suppliers else 0
-                            ),
-                            (
-                                plan_id, material_code, material_desc, cost_status, 'cost',
-                                company, project_def, project_desc,
-                                demand_qty, tech_spec_id,
-                                json.dumps(cost_suppliers, ensure_ascii=False), cost_total_cost, cost_unmet,
-                                current_time, current_time,
-                                cost_suppliers[0].get('supplierCode', '') if cost_suppliers else '',
-                                cost_suppliers[0].get('supplierName', '') if cost_suppliers else '',
-                                cost_allocated,
-                                cost_first_unit_price,
-                                cost_first_cost,
-                                float(cost_suppliers[0].get('executionRate', 0) or 0) if cost_suppliers else 0,
-                                float(cost_suppliers[0].get('remainQty', 0) or 0) if cost_suppliers else 0
-                            ),
-                            (
-                                plan_id, material_code, material_desc, delivery_status, 'delivery',
-                                company, project_def, project_desc,
-                                demand_qty, tech_spec_id,
-                                json.dumps(delivery_suppliers, ensure_ascii=False), delivery_total_cost, delivery_unmet,
-                                current_time, current_time,
-                                delivery_suppliers[0].get('supplierCode', '') if delivery_suppliers else '',
-                                delivery_suppliers[0].get('supplierName', '') if delivery_suppliers else '',
-                                delivery_allocated,
-                                delivery_first_unit_price,
-                                delivery_first_cost,
-                                float(delivery_suppliers[0].get('executionRate', 0) or 0) if delivery_suppliers else 0,
-                                float(delivery_suppliers[0].get('remainQty', 0) or 0) if delivery_suppliers else 0
+                                sup.get('supplierCode', ''),
+                                sup.get('supplierName', ''),
+                                alloc_tot,
+                                f_price,
+                                f_cost,
+                                exec_rate_val,
+                                float(sup.get('remainQty', 0) or 0),
+                                '',                                # fd_distance
+                                sup.get('subBidInfo', ''),         # fd_sub_bid_info
+                                0,                                 # fd_core
+                                '省内低' if sc == 'balanced' else '省内高',  # fd_interval
+                                '',                                # fd_balance
+                                current_time,                      # fd_compare_date
+                                sup.get('protocolNo', ''),         # fd_protocol_no
+                                str(alloc_rate_val),               # fd_preAllocRatio
+                                unit,                              # fd_unit
+                                '',                                # fd_bid_plan_no
+                                '',                                # fd_purch_no
+                                '',                                # fd_purch_line
+                                int(f_qty * f_price)               # fd_AllocRatio
                             )
-                        ])
+
+                        batch_data.append(make_supplier_tuple('balanced', balanced_first, balanced_suppliers, balanced_status, balanced_allocated, balanced_total_cost, balanced_unmet, balanced_first_unit_price, balanced_first_allocated, balanced_first_cost))
+                        batch_data.append(make_supplier_tuple('cost', cost_first, cost_suppliers, cost_status, cost_allocated, cost_total_cost, cost_unmet, cost_first_unit_price, cost_first_allocated, cost_first_cost))
+                        batch_data.append(make_supplier_tuple('delivery', delivery_first, delivery_suppliers, delivery_status, delivery_allocated, delivery_total_cost, delivery_unmet, delivery_first_unit_price, delivery_first_allocated, delivery_first_cost))
                     else:
                         # 无供应商时也保存记录
                         for strategy_code in ['balanced', 'cost', 'delivery']:
+                            interval_val = '省内低' if strategy_code == 'balanced' else '省内高'
                             batch_data.append((
                                 plan_id, material_code, material_desc, '失败', strategy_code,
                                 company, project_def, project_desc,
                                 demand_qty, tech_spec_id,
                                 json.dumps([]), 0, demand_qty,
                                 current_time, current_time,
-                                '', '', 0, 0, 0, 0, 0
+                                '', '', 0, 0, 0, 0, 0,
+                                '', '', 0, interval_val, '', current_time, '', '', unit, '', '', '', 0
                             ))
                 except Exception as e:
                     failed_count += 3
@@ -436,8 +399,11 @@ class SupplierMatchStreamService:
                             fd_supplier_results, fd_total_cost, fd_unmet_demand,
                             fd_create_time, fd_update_time,
                             fd_supplier_code, fd_supplier_name, fd_allocated_qty,
-                            fd_unit_price, fd_cost, fd_execution_rate, fd_remain_quantity
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            fd_unit_price, fd_cost, fd_execution_rate, fd_remain_quantity,
+                            fd_distance, fd_sub_bid_info, fd_core, fd_interval, fd_balance,
+                            fd_compare_date, fd_protocol_no, fd_preAllocRatio, fd_unit,
+                            fd_bid_plan_no, fd_purch_no, fd_purch_line, fd_AllocRatio
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ''', batch_data)
                     
                     conn.commit()
@@ -458,113 +424,6 @@ class SupplierMatchStreamService:
             yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
-
-    async def _iterative_analyze(self, plans: List[Dict[str, Any]], session_id: str = None):
-        """迭代分析模式 - 逐个分析每个计划
-
-        Args:
-            plans: 补货计划列表
-            session_id: 会话ID，用于支持终止功能
-        """
-        logger.info(f"_iterative_analyze 开始, plans={len(plans)}")
-        total_count = len(plans)
-        matched_count = 0
-        unmatched_count = 0
-
-        for idx, plan in enumerate(plans, 1):
-            plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
-            material_code = plan.get('materialCode', '')
-            tech_id = plan.get('techSpecId', '')
-            demand_qty = float(plan.get('demandQty', 0) or 0)
-            company = plan.get('company', '')
-
-            yield "\n📋 [处理 {idx}/{total_count}] 开始处理计划\n".format(idx=idx, total_count=total_count)
-            yield "────────────────────────────────────────\n"
-            yield f"   计划ID: {plan_id}\n"
-            yield f"   物料编码: {material_code}\n"
-            yield f"   技术规范ID: {tech_id}\n"
-            yield f"   需求数量: {demand_qty}\n"
-            yield "────────────────────────────────────────\n"
-
-            try:
-                yield "🔍 [子步骤 1/2] 获取物料描述...\n"
-                material_desc = plan.get('materialDesc', '') or plan.get('fd_desc', '')
-                if not material_desc:
-                    try:
-                        material_desc = await asyncio.wait_for(
-                            self._get_material_desc_from_stock(material_code, tech_id),
-                            timeout=20
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(f"获取物料描述超时, material_code={material_code}, plan_id={plan_id}")
-                        material_desc = ''
-                yield f"✅ [子步骤 1/2] 物料描述: {material_desc or '未获取到'}\n"
-
-                yield "🔍 [子步骤 2/2] 查询协议商库存...\n"
-                try:
-                    suppliers = await asyncio.wait_for(
-                        self._get_protocol_suppliers(plan),
-                        timeout=20
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"查询协议供应商超时, plan_id={plan_id}")
-                    suppliers = []
-
-                if suppliers:
-                    yield f"✅ [子步骤 3/3] 找到 {len(suppliers)} 个协议供应商\n"
-                    for i, s in enumerate(suppliers[:3], 1):
-                        yield f"   [{i}] 供应商: {s.get('supplierName', '')}, 执行率: {s.get('executionRate', 0)}%, 可用量: {s.get('remainQty', 0)}\n"
-                    if len(suppliers) > 3:
-                        yield f"   ... 还有 {len(suppliers) - 3} 个供应商\n"
-                    matched_count += 1
-                else:
-                    yield "⚠️ [子步骤 3/3] 未找到匹配的协议供应商\n"
-                    unmatched_count += 1
-
-                yield "\n🤖 开始AI智能分析...\n"
-                yield "────────────────────────────────────────\n"
-
-                prompt = self._build_single_plan_prompt(plan, suppliers, material_desc, company)
-                system_prompt = "你是一个专业的电力物料采购供应商匹配专家，擅长分析供应商协议数据并给出最优的供应商选择方案。请用清晰的中文进行分析。"
-
-                # 调用LLM前检查会话是否已取消
-                if session_id and session_manager.is_session_cancelled(session_id):
-                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
-                    return
-
-                # 获取会话的取消事件
-                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
-
-                if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
-                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'supplier', {'plans': all_plan_data, 'suppliers': all_suppliers}):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-                else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-
-                status = '有匹配' if suppliers else '无匹配'
-                yield f"\n✅ [处理完成] 供应商匹配状态: {status}\n"
-                logger.info(f"计划 {plan_id} 迭代分析完成, 状态={status}")
-
-            except Exception as e:
-                yield f"\n❌ [处理失败] {str(e)}\n"
-                logger.warning(f"计划 {plan_id} 迭代分析失败: {str(e)}")
-                unmatched_count += 1
-
-            yield "\n────────────────────────────────────────\n\n"
-
-        yield "\n📊 供应商匹配汇总报告\n"
-        yield "────────────────────────────────────────\n"
-        yield f"   总计划数: {total_count}\n"
-        yield f"   有供应商匹配: {matched_count}\n"
-        yield f"   无供应商匹配: {unmatched_count}\n"
-        yield "────────────────────────────────────────\n"
-        logger.info(f"_iterative_analyze 完成, 总计划数={total_count}, 有匹配={matched_count}, 无匹配={unmatched_count}")
 
     def _parse_llm_chunk(self, chunk) -> Optional[str]:
         """解析LLM返回的chunk，提取内容和思考过程"""
@@ -827,7 +686,8 @@ class SupplierMatchStreamService:
                 SELECT fd_protocol_no, fd_protocol_line, fd_mdm_supplier, fd_network_supplier,
                        fd_supplier_desc, fd_material_code, fd_material_desc,
                        fd_price_net, fd_net_price, fd_amount_net, fd_quantity, fd_remain_quantity,
-                       fd_execution_rate, fd_alloc_rate, fd_tech_spec_id
+                       fd_execution_rate, fd_alloc_rate, fd_tech_spec_id,
+                       fd_sub_bid_info
                 FROM mt_protocol_stock
                 WHERE fd_status = '有效'
                   AND fd_material_code = %s
@@ -854,6 +714,7 @@ class SupplierMatchStreamService:
                     'executionRate': float(row['fd_execution_rate'] or 0),
                     'allocRate': float(row['fd_alloc_rate'] or 0),
                     'techSpecId': row['fd_tech_spec_id'] or '',
+                    'subBidInfo': row['fd_sub_bid_info'] or '',
                 })
 
             return suppliers

@@ -26,19 +26,14 @@ class InventoryAnalysisStreamService:
             self.context_manager = None
 
     async def stream_analyze(self, start_date: str = None, end_date: str = None,
-                            inventory_levels: List[str] = None, material_codes: List[str] = None,
-                            season_factor_weight: float = None, safety_redundancy_ratio: float = None,
-                            analyze_mode: str = "batch", session_id: str = None):
+                            warehouse_code: str = None,
+                            session_id: str = None):
         """流式分析库存
 
         Args:
-            start_date: 开始日期
-            end_date: 结束日期
-            inventory_levels: 库存层级列表
-            material_codes: 物料编码列表
-            season_factor_weight: 季节因子权重
-            safety_redundancy_ratio: 安全冗余比例
-            analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
+            start_date: 开始日期（格式：YYYYMMDD）
+            end_date: 结束日期（格式：YYYYMMDD）
+            warehouse_code: 仓库编码，为空时查询所有仓库
             session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
@@ -49,57 +44,88 @@ class InventoryAnalysisStreamService:
         yield "   核心目标：优化库存结构、降低库存成本、避免缺货风险。\n\n"
         
         try:
-            yield "🔍 【阶段一：仓库数据采集】\n"
-            yield "   📌 当前需求：获取符合库存层级筛选条件的仓库信息\n"
-            yield "   📌 执行动作：从仓库主数据表查询仓库节点信息\n"
-            yield "   📌 数据用途：仓库节点是库存分析的基础单元，包含仓库编码、名称、层级等关键信息\n"
-            yield "   📌 筛选条件：库存层级（省公司、地市公司、县公司等）\n"
-            yield "   └─ 正在执行仓库数据检索...\n"
-            logger.info("正在执行仓库数据检索...")
-            try:
-                warehouse_info = await asyncio.wait_for(
-                    self._get_warehouse_info_by_levels(inventory_levels),
-                    timeout=30
-                )
-            except asyncio.TimeoutError:
-                yield "❌ 仓库数据采集超时：数据库响应超过30秒\n"
-                yield "   💡 建议：请检查数据库连接状态或减少查询范围\n"
-                return
-            warehouse_codes = list(warehouse_info.keys())
+            # 处理日期默认值：如果开始时间或结束时间为空，默认设置为未来7-14天
+            from datetime import datetime, timedelta
+            today = datetime.now().date()
+            
+            if not start_date or not end_date:
+                default_start = today + timedelta(days=7)
+                default_end = today + timedelta(days=14)
+                if not start_date:
+                    start_date = default_start.strftime('%Y%m%d')
+                if not end_date:
+                    end_date = default_end.strftime('%Y%m%d')
+                yield f"⚠️ 日期参数未完整指定，已默认设置为未来7-14天\n"
+                yield f"   └─ 开始日期：{start_date}\n"
+                yield f"   └─ 结束日期：{end_date}\n\n"
 
-            if not warehouse_codes:
-                yield "❌ 仓库数据采集失败：未查询到符合条件的仓库\n"
-                yield "   💡 建议：请检查库存层级配置是否正确，或确认仓库表中是否有符合条件的数据\n"
-                return
+            yield "🔍 【阶段一：确定仓库范围】\n"
+            if warehouse_code:
+                yield f"   ✅ 使用指定仓库：{warehouse_code}\n"
+                yield f"   └─ 无需查询仓库主数据表，直接使用该仓库编码\n"
+                warehouse_codes = [warehouse_code]
+                try:
+                    warehouse_info = await asyncio.wait_for(
+                        self._get_warehouse_info_by_code(warehouse_code),
+                        timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    yield "❌ 仓库信息查询超时：数据库响应超过 30 秒\n"
+                    yield "   💡 建议：请检查数据库连接状态\n"
+                    return
+                except Exception as e:
+                    logger.warning(f"获取仓库信息失败，使用简化信息: {str(e)}")
+                    warehouse_info = {warehouse_code: {'name': warehouse_code, 'level': ''}}
+            else:
+                yield "   📌 当前需求：获取所有仓库的信息\n"
+                yield "   📌 执行动作：从仓库主数据表查询所有仓库\n"
+                yield "   └─ 正在执行仓库数据检索...\n"
+                logger.info("正在执行仓库数据检索...")
+                try:
+                    warehouse_info = await asyncio.wait_for(
+                        self._get_all_warehouse_info(),
+                        timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    yield "❌ 仓库数据采集超时：数据库响应超过 30 秒\n"
+                    yield "   💡 建议：请检查数据库连接状态或减少查询范围\n"
+                    return
+                warehouse_codes = list(warehouse_info.keys())
 
-            yield f"✅ 仓库数据采集成功\n"
-            yield f"   └─ 共获取 {len(warehouse_codes)} 个仓库节点\n"
-            yield f"   └─ 仓库列表: {', '.join(warehouse_codes[:5])}"
-            if len(warehouse_codes) > 5:
-                yield f" ... 还有{len(warehouse_codes) - 5}个"
-            yield f"\n"
-            yield f"   └─ 数据完整性：已验证仓库编码、名称、层级等字段\n"
-            yield f"   └─ 下一步：获取物料编码列表，构建组合矩阵\n\n"
+                if not warehouse_codes:
+                    yield "❌ 仓库数据采集失败：未查询到符合条件的仓库\n"
+                    yield "   💡 建议：请检查仓库表中是否有数据\n"
+                    return
 
+                yield f"✅ 仓库数据采集成功\n"
+                yield f"   └─ 共获取 {len(warehouse_codes)} 个仓库节点\n"
+                yield f"   └─ 仓库列表：{', '.join(warehouse_codes[:5])}"
+                if len(warehouse_codes) > 5:
+                    yield f" ... 还有{len(warehouse_codes) - 5}个"
+                yield f"\n"
+            
+            yield f"   └─ 下一步：查询该仓库下的物料 + 技术规范组合\n\n"
             yield "🔍 【阶段二：物料数据采集】\n"
             yield "   📌 当前需求：获取需要分析的物料编码列表\n"
             yield "   📌 执行动作：从历史出库表提取指定仓库下有出库记录的物料编码\n"
             yield "   📌 数据用途：物料编码是库存分析的核心维度，用于关联库存和消耗数据\n"
-            yield "   📌 数据来源：\n"
-            yield "      • 外部输入：用户指定的物料编码列表\n"
-            yield "      • 关联数据：从历史出库表获取指定仓库下有出库记录的物料\n"
             yield "   └─ 正在执行物料数据检索...\n"
             logger.info("正在执行物料数据检索...")
-            if not material_codes or len(material_codes) == 0:
-                try:
-                    material_codes = await asyncio.wait_for(
-                        self._get_all_material_codes(warehouse_codes),
-                        timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    yield "❌ 物料数据采集超时：数据库响应超过30秒\n"
-                    yield "   💡 建议：请检查数据库连接状态或减少物料范围\n"
-                    return
+            try:
+                material_codes = await asyncio.wait_for(
+                    self._get_all_material_codes(warehouse_codes),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                yield "❌ 物料数据采集超时：数据库响应超过30秒\n"
+                yield "   💡 建议：请检查数据库连接状态或减少物料范围\n"
+                return
+            
+            if not material_codes:
+                yield "❌ 物料数据采集失败：未查询到符合条件的物料\n"
+                yield "   💡 建议：请检查仓库数据是否完整，或确认历史出库表中是否有数据\n"
+                return
+                
             yield f"✅ 物料数据采集成功\n"
             yield f"   └─ 共获取 {len(material_codes)} 个物料编码\n"
             yield f"   └─ 物料示例: {', '.join(material_codes[:5])}"
@@ -154,28 +180,19 @@ class InventoryAnalysisStreamService:
                 yield "❌ 【会话已终止】用户已取消当前分析任务\n"
                 return
 
-            if analyze_mode == "batch":
-                yield "⚡ 【阶段四：AI智能批量分析】\n"
-                yield "   📌 当前需求：对所有组合进行一次性深度智能分析\n"
-                yield "   📌 执行动作：启动大规模并行分析引擎，运用机器学习算法\n"
-                yield "   📌 分析目标：\n"
-                yield "      • 水位计算：计算应急线、补库线、高位线\n"
-                yield "      • 状态评估：判断库存健康状态（紧急、低、中、高）\n"
-                yield "      • 补货建议：生成科学的补货建议和数量\n"
-                yield "   📌 技术架构：时间序列分析 + 统计学习 + 规则引擎\n"
-                yield "   └─ 正在启动AI分析引擎...\n"
-                yield "   └─ 预计分析时间：取决于组合数量和数据复杂度\n\n"
-                logger.info("正在启动AI分析引擎...")
-                async for chunk in self._batch_analyze(all_combinations, warehouse_info, start_date, end_date, session_id):
-                    yield chunk
-            else:
-                yield "🔄 【阶段四：AI迭代分析】\n"
-                yield "   📌 当前需求：对每个组合依次进行独立分析\n"
-                yield "   📌 执行动作：启动迭代分析模式，逐个处理组合\n"
-                yield "   📌 分析特点：适合组合数量较大或需要实时反馈的场景\n"
-                yield "   └─ 正在启动迭代分析...\n\n"
-                async for chunk in self._iterative_analyze(all_combinations, warehouse_info, start_date, end_date, session_id):
-                    yield chunk
+            yield "⚡ 【阶段四：AI智能批量分析】\n"
+            yield "   📌 当前需求：对所有组合进行一次性深度智能分析\n"
+            yield "   📌 执行动作：启动大规模并行分析引擎，运用机器学习算法\n"
+            yield "   📌 分析目标：\n"
+            yield "      • 水位计算：计算应急线、补库线、高位线\n"
+            yield "      • 状态评估：判断库存健康状态（紧急、低、中、高）\n"
+            yield "      • 补货建议：生成科学的补货建议和数量\n"
+            yield "   📌 技术架构：时间序列分析 + 统计学习 + 规则引擎\n"
+            yield "   └─ 正在启动AI分析引擎...\n"
+            yield "   └─ 预计分析时间：取决于组合数量和数据复杂度\n\n"
+            logger.info("正在启动AI分析引擎...")
+            async for chunk in self._batch_analyze(all_combinations, warehouse_info, start_date, end_date, session_id):
+                yield chunk
 
         except Exception as e:
             yield f"❌ 系统异常：分析过程中发生错误\n"
@@ -588,160 +605,6 @@ class InventoryAnalysisStreamService:
             import traceback
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
-    async def _iterative_analyze(self, all_combinations: List[Dict[str, Any]], warehouse_info: Dict,
-                                 start_date: str, end_date: str, session_id: str = None):
-        """迭代分析模式 - 逐个分析每个组合
-
-        Args:
-            all_combinations: 组合列表
-            warehouse_info: 仓库信息
-            start_date: 开始日期
-            end_date: 结束日期
-            session_id: 会话ID，用于支持终止功能
-        """
-        logger.info(f"_iterative_analyze 开始, 总组合数={len(all_combinations)}")
-        total_count = len(all_combinations)
-        success_count = 0
-        fail_count = 0
-
-        for idx, combo in enumerate(all_combinations, 1):
-            warehouse_code = combo['warehouse_code']
-            material_code = combo['material_code']
-            tech_id = combo['tech_id']
-
-            if not tech_id:
-                continue
-
-            warehouse_name = warehouse_info.get(warehouse_code, {}).get('name', '')
-            inventory_level = warehouse_info.get(warehouse_code, {}).get('level', '')
-
-            yield "\n📋 [分析 {idx}/{total_count}] 开始分析组合\n".format(idx=idx, total_count=total_count)
-            yield "────────────────────────────────────────\n"
-            yield f"   仓库编码: {warehouse_code}\n"
-            yield f"   仓库名称: {warehouse_name}\n"
-            yield f"   库存层级: {inventory_level}\n"
-            yield f"   物料编码: {material_code}\n"
-            yield f"   技术规范ID: {tech_id}\n"
-            yield "────────────────────────────────────────\n"
-
-            try:
-                yield "🔍 [子步骤 1/2] 查询当前库存数据...\n"
-                try:
-                    current_stock_data = await asyncio.wait_for(
-                        self._get_current_stock(warehouse_code, material_code, tech_id),
-                        timeout=20
-                    )
-                except asyncio.TimeoutError:
-                    yield f"   ⚠️ [{warehouse_code}×{material_code}×{tech_id}] 查询库存超时(>20s), 跳过该组合\n"
-                    logger.warning(f"查询当前库存超时, warehouse={warehouse_code}, material={material_code}")
-                    fail_count += 1
-                    continue
-
-                current_stock = 0
-                in_transit_stock = 0
-                material_desc = ''
-                if current_stock_data and len(current_stock_data) > 0:
-                    current_stock = float(current_stock_data[0].get('current_stock', 0) or 0)
-                    in_transit_stock = float(current_stock_data[0].get('in_transit_stock', 0) or 0)
-                    material_desc = current_stock_data[0].get('material_desc', '') or ''
-
-                yield f"✅ [子步骤 1/2] 当前库存: {current_stock}, 在途库存: {in_transit_stock}\n"
-                if material_desc:
-                    yield f"   物料描述: {material_desc}\n"
-
-                yield "🔍 [子步骤 2/2] 查询历史出库数据...\n"
-                try:
-                    outbound_data = await asyncio.wait_for(
-                        self._get_outbound_data(warehouse_code, material_code, tech_id, start_date, end_date),
-                        timeout=20
-                    )
-                except asyncio.TimeoutError:
-                    yield f"   ⚠️ [{warehouse_code}×{material_code}×{tech_id}] 查询出库数据超时(>20s), 使用空数据继续\n"
-                    logger.warning(f"查询历史出库超时, warehouse={warehouse_code}, material={material_code}")
-                    outbound_data = []
-
-                if outbound_data:
-                    yield f"✅ [子步骤 2/2] 获取到 {len(outbound_data)} 条历史出库记录\n"
-                else:
-                    yield "⚠️ [子步骤 2/2] 未查询到历史出库数据\n"
-
-                stats = self._calculate_outbound_stats(outbound_data, start_date, end_date)
-
-                yield f"📈 历史数据统计:\n"
-                yield f"   最高月出库: {stats['max_outbound']:.0f}\n"
-                yield f"   最低月出库: {stats['min_outbound']:.0f}\n"
-                yield f"   平均月出库: {stats['avg_outbound']:.2f}\n"
-                yield f"   中位数出库: {stats['median_outbound']:.2f}\n"
-                if stats['std_dev']:
-                    yield f"   标准差: {stats['std_dev']:.2f}\n"
-                if stats['yoy_change'] is not None:
-                    yield f"   同比变化: {stats['yoy_change']:+.1f}%\n"
-                if stats['mom_change'] is not None:
-                    yield f"   环比变化: {stats['mom_change']:+.1f}%\n"
-                if stats['seasonality']:
-                    yield f"   季节性特征: {stats['seasonality']}\n"
-
-                combo_data = [{
-                    'warehouse_code': warehouse_code,
-                    'warehouse_name': warehouse_name,
-                    'inventory_level': inventory_level,
-                    'material_code': material_code,
-                    'tech_id': tech_id,
-                    'current_stock': current_stock,
-                    'in_transit_stock': in_transit_stock,
-                    'material_desc': material_desc,
-                    'available_stock': current_stock + in_transit_stock,
-                    '历史出库': [{
-                        '月份': str(ob.get('posting_month', ob.get('month', ''))),
-                        '出库数量': float(ob.get('outbound_qty', 0) or 0)
-                    } for ob in outbound_data[:24]],
-                    '统计数据': stats
-                }]
-
-                yield "\n🤖 开始AI智能分析...\n"
-                yield "────────────────────────────────────────\n"
-
-                prompt = self._build_single_combo_prompt(combo_data, start_date, end_date)
-                system_prompt = "你是一个专业的电力物资库存分析专家，擅长分析库存数据和历史消耗模式。请用清晰的中文进行分析。"
-
-                # 调用LLM前检查会话是否已取消
-                if session_id and session_manager.is_session_cancelled(session_id):
-                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
-                    return
-
-                # 获取会话的取消事件
-                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
-
-                if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
-                    logger.info("prompt过长, 启用分层推理模式")
-                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'inventory', all_combo_data):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-                else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-
-                yield "\n✅ [分析完成] 组合分析成功\n"
-                success_count += 1
-
-            except Exception as e:
-                yield f"\n❌ [分析失败] {str(e)}\n"
-                fail_count += 1
-
-            yield "\n────────────────────────────────────────\n\n"
-
-        yield "\n📊 分析汇总报告\n"
-        yield "────────────────────────────────────────\n"
-        yield f"   总组合数: {total_count}\n"
-        yield f"   成功分析: {success_count}\n"
-        yield f"   分析失败: {fail_count}\n"
-        yield "────────────────────────────────────────\n"
-        logger.info(f"_iterative_analyze 完成, 总组合数={total_count}, 成功={success_count}, 失败={fail_count}")
-
     def _calculate_outbound_stats(self, outbound_data: List[Dict[str, Any]], start_date: str = None, end_date: str = None) -> Dict[str, Any]:
         """计算历史出库数据的统计指标"""
         stats = {
@@ -1102,8 +965,8 @@ class InventoryAnalysisStreamService:
 
     # ==================== 数据查询方法（从 InventoryAnalysisService 迁移） ====================
 
-    async def _get_warehouse_info_by_levels(self, inventory_levels: Optional[List[str]] = None) -> Dict[str, Dict[str, str]]:
-        """获取仓库信息（按库存层级筛选）"""
+    async def _get_warehouse_info_by_code(self, warehouse_code: str) -> Dict[str, Dict[str, str]]:
+        """获取指定仓库编码的仓库信息"""
         warehouse_info = {}
         conn = None
         try:
@@ -1113,16 +976,38 @@ class InventoryAnalysisStreamService:
             query = '''
                 SELECT fd_warehouse_code, fd_warehouse_name, fd_stock_level
                 FROM mt_base_warehouse_info
-                WHERE 1=1
+                WHERE fd_warehouse_code = %s
             '''
-            params = []
+            cur.execute(query, (warehouse_code,))
+            row = cur.fetchone()
 
-            if inventory_levels and len(inventory_levels) > 0:
-                placeholders = ','.join(['%s' for _ in inventory_levels])
-                query += f" AND fd_stock_level IN ({placeholders})"
-                params.extend(inventory_levels)
+            if row:
+                warehouse_info[warehouse_code] = {
+                    'name': row['fd_warehouse_name'] or '',
+                    'level': row['fd_stock_level'] or ''
+                }
 
-            cur.execute(query, params)
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 获取仓库信息失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return warehouse_info
+
+    async def _get_all_warehouse_info(self) -> Dict[str, Dict[str, str]]:
+        """获取所有仓库信息"""
+        warehouse_info = {}
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            query = '''
+                SELECT fd_warehouse_code, fd_warehouse_name, fd_stock_level
+                FROM mt_base_warehouse_info
+            '''
+            cur.execute(query)
             rows = cur.fetchall()
 
             for row in rows:
@@ -1178,20 +1063,18 @@ class InventoryAnalysisStreamService:
 
     async def _get_valid_combinations(self, warehouse_codes: List[str], material_codes: List[str],
                                        start_date: str = None, end_date: str = None) -> List[Dict[str, str]]:
-        """批量查询所有有效的仓库-物料-技术规范组合"""
+        """批量查询所有有效的仓库 - 物料 - 技术规范组合
+        
+        注意：start_date 和 end_date 是预测的未来时间段，不用于过滤历史出库数据
+        历史出库数据应该全部获取，用于预测未来需求
+        """
         combinations = []
         conn = None
         try:
             conn = self.db._get_connection()
             cur = conn.cursor()
 
-            start_month = None
-            end_month = None
-            if start_date and len(start_date) == 6:
-                start_month = f"{start_date[:4]}-{start_date[4:]}"
-            if end_date and len(end_date) == 6:
-                end_month = f"{end_date[:4]}-{end_date[4:]}"
-
+            # 不使用日期范围过滤历史数据，因为我们需要所有历史数据来预测未来
             query = '''
                 SELECT DISTINCT fd_warehouse_code, fd_material_code, fd_tech_id
                 FROM mt_historical_outbound
@@ -1209,14 +1092,6 @@ class InventoryAnalysisStreamService:
                 query += f" AND fd_material_code IN ({placeholders})"
                 params.extend(material_codes)
 
-            if start_month:
-                query += " AND fd_posting_month >= %s"
-                params.append(start_month)
-
-            if end_month:
-                query += " AND fd_posting_month <= %s"
-                params.append(end_month)
-
             cur.execute(query, params)
             rows = cur.fetchall()
 
@@ -1228,7 +1103,7 @@ class InventoryAnalysisStreamService:
                 })
 
         except Exception as e:
-            logger.error(f"[InventoryAnalysisStream] 批量查询组合失败: {str(e)}")
+            logger.error(f"[InventoryAnalysisStream] 批量查询组合失败：{str(e)}")
         finally:
             if conn:
                 conn.close()

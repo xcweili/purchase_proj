@@ -266,7 +266,7 @@ class InventoryAnalysisStreamAgent:
     def _build_stream_prompt(self, stocks: List[Dict[str, Any]], outbound: List[Dict[str, Any]],
                             start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, season_factor: float = 0.3,
-                            safety_ratio: float = 0.2, analyze_mode: str = "iterative") -> str:
+                            safety_ratio: float = 0.2) -> str:
         """构建流式接口的prompt
 
         Args:
@@ -277,7 +277,6 @@ class InventoryAnalysisStreamAgent:
             inventory_levels: 库存层级列表
             season_factor: 季节因子权重
             safety_ratio: 安全冗余比例
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析
         """
         if start_date and end_date:
             period_desc = f"{start_date} 至 {end_date}"
@@ -293,50 +292,40 @@ class InventoryAnalysisStreamAgent:
         else:
             levels_desc = "所有层级"
 
-        if analyze_mode == "batch":
-            prompt = STREAM_INVENTORY_ANALYSIS_BATCH_PROMPT.format(
-                period_desc=period_desc,
-                inventory_levels=levels_desc,
-                season_factor=season_factor if season_factor else "默认(0.3)",
-                safety_ratio=safety_ratio if safety_ratio else "默认(0.2)",
-                combo_count=len(stocks),
-                stocks_json=json.dumps([_extract_stock_for_stream(s) for s in stocks], ensure_ascii=False, indent=2),
-                outbound_json=json.dumps([_extract_outbound_for_stream(o) for o in outbound], ensure_ascii=False, indent=2),
-                warehouse_code_placeholder="{warehouse_code}",
-                warehouse_name_placeholder="{warehouse_name}",
-                inventory_level_placeholder="{inventory_level}",
-                material_code_placeholder="{material_code}",
-                tech_id_placeholder="{tech_id}",
-                material_desc_placeholder="{material_desc}",
-                current_stock_placeholder="{current_stock}",
-                in_transit_stock_placeholder="{in_transit_stock}",
-                available_stock_placeholder="{available_stock}",
-                max_outbound_placeholder="{max_outbound}",
-                min_outbound_placeholder="{min_outbound}",
-                avg_outbound_placeholder="{avg_outbound}",
-                median_outbound_placeholder="{median_outbound}",
-                yoy_change_placeholder="{yoy_change}",
-                mom_change_placeholder="{mom_change}",
-                seasonality_placeholder="{seasonality}",
-                emergency_line_placeholder="{emergency_line}",
-                replenish_line_placeholder="{replenish_line}",
-                high_line_placeholder="{high_line}"
-            )
-        else:
-            prompt = STREAM_INVENTORY_ANALYSIS_PROMPT.format(
-                period_desc=period_desc,
-                inventory_levels=levels_desc,
-                season_factor=season_factor if season_factor else "默认(0.3)",
-                safety_ratio=safety_ratio if safety_ratio else "默认(0.2)",
-                stocks_json=json.dumps([_extract_stock_for_stream(s) for s in stocks], ensure_ascii=False, indent=2),
-                outbound_json=json.dumps([_extract_outbound_for_stream(o) for o in outbound], ensure_ascii=False, indent=2)
-            )
+        prompt = STREAM_INVENTORY_ANALYSIS_BATCH_PROMPT.format(
+            period_desc=period_desc,
+            inventory_levels=levels_desc,
+            season_factor=season_factor if season_factor else "默认(0.3)",
+            safety_ratio=safety_ratio if safety_ratio else "默认(0.2)",
+            combo_count=len(stocks),
+            stocks_json=json.dumps([_extract_stock_for_stream(s) for s in stocks], ensure_ascii=False, indent=2),
+            outbound_json=json.dumps([_extract_outbound_for_stream(o) for o in outbound], ensure_ascii=False, indent=2),
+            warehouse_code_placeholder="{warehouse_code}",
+            warehouse_name_placeholder="{warehouse_name}",
+            inventory_level_placeholder="{inventory_level}",
+            material_code_placeholder="{material_code}",
+            tech_id_placeholder="{tech_id}",
+            material_desc_placeholder="{material_desc}",
+            current_stock_placeholder="{current_stock}",
+            in_transit_stock_placeholder="{in_transit_stock}",
+            available_stock_placeholder="{available_stock}",
+            max_outbound_placeholder="{max_outbound}",
+            min_outbound_placeholder="{min_outbound}",
+            avg_outbound_placeholder="{avg_outbound}",
+            median_outbound_placeholder="{median_outbound}",
+            yoy_change_placeholder="{yoy_change}",
+            mom_change_placeholder="{mom_change}",
+            seasonality_placeholder="{seasonality}",
+            emergency_line_placeholder="{emergency_line}",
+            replenish_line_placeholder="{replenish_line}",
+            high_line_placeholder="{high_line}"
+        )
         return prompt
 
     async def stream_analyze(self, stocks: List[Dict[str, Any]], outbound: List[Dict[str, Any]],
                             start_date: str = None, end_date: str = None,
                             inventory_levels: List[str] = None, season_factor: float = 0.3,
-                            safety_ratio: float = 0.2, analyze_mode: str = "iterative"):
+                            safety_ratio: float = 0.2):
         """流式分析库存
 
         Args:
@@ -347,10 +336,9 @@ class InventoryAnalysisStreamAgent:
             inventory_levels: 库存层级列表
             season_factor: 季节因子权重
             safety_ratio: 安全冗余比例
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析(默认)
         """
         prompt = self._build_stream_prompt(stocks, outbound, start_date, end_date,
-                                          inventory_levels, season_factor, safety_ratio, analyze_mode)
+                                          inventory_levels, season_factor, safety_ratio)
         system_prompt = "你是一个专业的电力物料库存分析专家，擅长分析库存数据、预测需求并给出合理的补货建议。"
         async for chunk in self.llm_stream_func(prompt, system_prompt):
             yield chunk

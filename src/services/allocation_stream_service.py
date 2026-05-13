@@ -28,7 +28,7 @@ class AllocationStreamService:
                             source_type: str = "", project_unit: str = "",
                             demand_start_date: str = "", demand_end_date: str = "",
                             plan_type: str = "", material_codes: List[str] = None,
-                            analyze_mode: str = "batch", session_id: str = None):
+                            session_id: str = None):
         """流式分析调配方案
 
         Args:
@@ -40,7 +40,6 @@ class AllocationStreamService:
             demand_end_date: 需求结束日期
             plan_type: 计划类型
             material_codes: 物料编码列表
-            analyze_mode: 分析模式，"batch"一次性分析所有组合(默认)，"iterative"逐个分析
             session_id: 会话ID，用于支持终止功能
         """
         # 立即输出第一个消息，让用户知道服务正在处理
@@ -53,7 +52,7 @@ class AllocationStreamService:
         logger.info(f"开始流式调配分析, strategy={strategy}, warehouse_code={warehouse_code}, "
                     f"source_type={source_type}, project_unit={project_unit}, "
                     f"demand_start_date={demand_start_date}, demand_end_date={demand_end_date}, "
-                    f"plan_type={plan_type}, material_codes={material_codes}, analyze_mode={analyze_mode}")
+                    f"plan_type={plan_type}, material_codes={material_codes}")
         
         try:
             yield "🔍 【阶段一：需求计划数据采集】\n"
@@ -160,30 +159,20 @@ class AllocationStreamService:
                 yield "❌ 【会话已终止】用户已取消当前分析任务\n"
                 return
 
-            if analyze_mode == "batch":
-                yield "⚡ 【阶段五：AI智能批量分析】\n"
-                yield "   📌 当前需求：对所有需求计划进行一次性深度智能分析\n"
-                yield "   📌 执行动作：启动大规模并行分析引擎，运用深度学习模型\n"
-                yield "   📌 分析目标：\n"
-                yield "      • 智能匹配：为每个计划选择最优仓库\n"
-                yield "      • 多维优化：综合考虑距离、库存、成本等因素\n"
-                yield "      • 决策推理：生成可解释的调配建议\n"
-                yield "   📌 技术架构：多目标优化算法 + 规则引擎\n"
-                yield "   └─ 正在启动AI分析引擎...\n"
-                yield "   └─ 预计分析时间：取决于数据规模和复杂度\n\n"
-                logger.info(f"启动批量调配分析, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
-                async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code,
-                                                     project_unit, source_type, plan_type, session_id):
-                    yield chunk
-            else:
-                yield "🔄 【阶段五：AI迭代分析】\n"
-                yield "   📌 当前需求：对每个需求计划依次进行独立分析\n"
-                yield "   📌 执行动作：启动迭代分析模式，逐个处理计划\n"
-                yield "   📌 分析特点：适合数据量较大或需要实时反馈的场景\n"
-                yield "   └─ 正在启动迭代分析...\n\n"
-                logger.info(f"启动迭代调配分析, plans={len(plans)}, strategy={strategy}")
-                async for chunk in self._iterative_analyze(plans, stocks, strategy, warehouse_code, session_id):
-                    yield chunk
+            yield "⚡ 【阶段五：AI智能批量分析】\n"
+            yield "   📌 当前需求：对所有需求计划进行一次性深度智能分析\n"
+            yield "   📌 执行动作：启动大规模并行分析引擎，运用深度学习模型\n"
+            yield "   📌 分析目标：\n"
+            yield "      • 智能匹配：为每个计划选择最优仓库\n"
+            yield "      • 多维优化：综合考虑距离、库存、成本等因素\n"
+            yield "      • 决策推理：生成可解释的调配建议\n"
+            yield "   📌 技术架构：多目标优化算法 + 规则引擎\n"
+            yield "   └─ 正在启动AI分析引擎...\n"
+            yield "   └─ 预计分析时间：取决于数据规模和复杂度\n\n"
+            logger.info(f"启动批量调配分析, plans={len(plans)}, stocks={len(stocks)}, strategy={strategy}")
+            async for chunk in self._batch_analyze(plans, stocks, strategy, warehouse_code,
+                                                 project_unit, source_type, plan_type, session_id):
+                yield chunk
 
         except Exception as e:
             yield f"❌ 系统异常：分析过程中发生错误\n"
@@ -481,125 +470,6 @@ class AllocationStreamService:
             yield f"   └─ 错误信息：{str(e)}\n"
             import traceback
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
-
-    async def _iterative_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
-                                 strategy: str, target_warehouse: str, session_id: str = None):
-        """迭代分析模式 - 逐个分析每个计划
-
-        Args:
-            plans: 需求计划列表
-            stocks: 库存列表
-            strategy: 调配策略
-            target_warehouse: 目标仓库
-            session_id: 会话ID，用于支持终止功能
-        """
-        logger.info(f"_iterative_analyze 开始, plans={len(plans)}, strategy={strategy}")
-        total_count = len(plans)
-        full_match_count = 0
-        partial_match_count = 0
-        none_match_count = 0
-
-        for idx, plan in enumerate(plans, 1):
-            plan_id = plan.get('planId') or plan.get('plan_id', f'plan_{idx}')
-            material_code = plan.get('materialCode') or plan.get('material_code', '')
-            tech_spec_id = plan.get('techSpecId') or ''
-            demand_qty = float(plan.get('demandQty') or plan.get('demand_qty', 0))
-            target_warehouse = plan.get('warehouseCode', '')
-            material_desc = plan.get('materialDesc', '')
-
-            yield "\n📋 [处理 {idx}/{total_count}] 开始处理计划\n".format(idx=idx, total_count=total_count)
-            yield "────────────────────────────────────────\n"
-            yield f"   计划ID: {plan_id}\n"
-            yield f"   物料编码: {material_code}\n"
-            yield f"   物料描述: {material_desc}\n"
-            yield f"   技术规范ID: {tech_spec_id}\n"
-            yield f"   需求数量: {demand_qty}\n"
-            yield f"   目标仓库: {target_warehouse}\n"
-            yield f"   策略: {strategy}\n"
-            yield "────────────────────────────────────────\n"
-
-            try:
-                yield "🔍 [子步骤 1/2] 查询物料库存...\n"
-                matching_stocks = [s for s in stocks if s.get('material_code') == material_code]
-
-                if matching_stocks:
-                    yield f"✅ [子步骤 1/2] 找到 {len(matching_stocks)} 个库存记录\n"
-                    for i, stock in enumerate(matching_stocks[:3], 1):
-                        yield f"   [{i}] 仓库: {stock.get('loc_code', '')}, 库存: {stock.get('stock_qty', 0)}, 类型: {stock.get('source_type', '')}\n"
-                    if len(matching_stocks) > 3:
-                        yield f"   ... 还有 {len(matching_stocks) - 3} 个库存\n"
-                else:
-                    yield "⚠️ [子步骤 1/2] 未找到匹配的库存\n"
-
-                total_available = sum(float(s.get('stock_qty', 0) or 0) for s in matching_stocks)
-                yield f"   总可用库存: {total_available}\n"
-
-                yield "\n🤖 开始AI智能分析...\n"
-                yield "────────────────────────────────────────\n"
-
-                prompt = self._build_single_plan_prompt(plan, matching_stocks, strategy, target_warehouse)
-                system_prompt = "你是一个专业的电力物资调配专家，擅长分析库存分布并给出最优的调配方案。请用清晰的中文进行分析。"
-
-                # 调用LLM前检查会话是否已取消
-                if session_id and session_manager.is_session_cancelled(session_id):
-                    yield "\n❌ 【会话已终止】用户已取消当前分析任务\n"
-                    return
-
-                # 获取会话的取消事件
-                cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
-
-                if self.context_manager and self.context_manager.is_too_long(prompt):
-                    yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
-                    async for chunk in self.context_manager._streaming_sandbox_execution(prompt, system_prompt, 'allocation', {'plans': all_plan_data, 'stocks': stocks, 'strategy': strategy}):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-                else:
-                    async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
-                        content = self._parse_llm_chunk(chunk)
-                        if content:
-                            yield content
-
-                if total_available >= demand_qty:
-                    status = 'full'
-                    full_match_count += 1
-                elif total_available > 0:
-                    status = 'partial'
-                    partial_match_count += 1
-                else:
-                    status = 'none'
-                    none_match_count += 1
-
-                yield f"\n✅ [处理完成] 匹配状态: {'完全匹配' if status == 'full' else '部分匹配' if status == 'partial' else '无匹配'}\n"
-
-            except Exception as e:
-                yield f"\n❌ [处理失败] {str(e)}\n"
-                none_match_count += 1
-
-            yield "\n────────────────────────────────────────\n\n"
-
-        yield "\n\n📊 调配分析汇总报告\n"
-        yield "────────────────────────────────────────\n"
-        yield f"   总计划数: {total_count}\n"
-        yield f"   完全匹配: {full_match_count}\n"
-        yield f"   部分匹配: {partial_match_count}\n"
-        yield f"   无匹配: {none_match_count}\n"
-
-        suggestion = ""
-        if full_match_count == total_count:
-            suggestion = f"{total_count}项完全匹配可直接审核"
-        elif full_match_count + partial_match_count > 0:
-            suggestion = f"{full_match_count}项完全匹配可直接审核，{partial_match_count}项部分匹配建议跨仓调拨或协议补库"
-        else:
-            suggestion = "所有物料无库存，建议触发协议补库流程"
-
-        if none_match_count > 0 and full_match_count + partial_match_count > 0:
-            suggestion += f"，{none_match_count}项建议走应急采购"
-
-        yield f"   建议: {suggestion}\n"
-        yield "────────────────────────────────────────\n"
-        logger.info(f"_iterative_analyze 完成, 总计划数={total_count}, 完全匹配={full_match_count}, "
-                    f"部分匹配={partial_match_count}, 无匹配={none_match_count}")
 
     def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
         """解析LLM返回的JSON格式chunk，提取内容和思考过程"""

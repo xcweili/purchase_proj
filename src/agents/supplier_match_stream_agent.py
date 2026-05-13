@@ -284,43 +284,33 @@ class SupplierMatchStreamAgent:
     def __init__(self, llm_stream_func):
         self.llm_stream_func = llm_stream_func
 
-    def _build_stream_prompt(self, plans: List[Dict[str, Any]], suppliers: List[Dict[str, Any]],
-                            analyze_mode: str = "iterative") -> str:
+    def _build_stream_prompt(self, plans: List[Dict[str, Any]], suppliers: List[Dict[str, Any]]) -> str:
         """构建流式接口的prompt
 
         Args:
             plans: 补货计划列表
             suppliers: 供应商列表
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析
         """
-        if analyze_mode == "batch":
-            prompt = STREAM_SUPPLIER_MATCH_BATCH_PROMPT.format(
-                plan_count=len(plans),
-                plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
-                suppliers_json=json.dumps([_extract_supplier_for_stream(s) for s in suppliers], ensure_ascii=False, indent=2),
-                plan_id_placeholder="{plan_id}",
-                material_code_placeholder="{material_code}",
-                material_desc_placeholder="{material_desc}",
-                demand_qty_placeholder="{demand_qty}",
-                warehouse_code_placeholder="{warehouse_code}"
-            )
-        else:
-            prompt = STREAM_SUPPLIER_MATCH_PROMPT.format(
-                plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
-                suppliers_json=json.dumps([_extract_supplier_for_stream(s) for s in suppliers], ensure_ascii=False, indent=2)
-            )
+        prompt = STREAM_SUPPLIER_MATCH_BATCH_PROMPT.format(
+            plan_count=len(plans),
+            plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
+            suppliers_json=json.dumps([_extract_supplier_for_stream(s) for s in suppliers], ensure_ascii=False, indent=2),
+            plan_id_placeholder="{plan_id}",
+            material_code_placeholder="{material_code}",
+            material_desc_placeholder="{material_desc}",
+            demand_qty_placeholder="{demand_qty}",
+            warehouse_code_placeholder="{warehouse_code}"
+        )
         return prompt
 
-    async def stream_analyze(self, plans: List[Dict[str, Any]], suppliers: List[Dict[str, Any]],
-                            analyze_mode: str = "iterative"):
+    async def stream_analyze(self, plans: List[Dict[str, Any]], suppliers: List[Dict[str, Any]]) -> None:
         """流式分析供应商匹配
 
         Args:
             plans: 补货计划列表
             suppliers: 供应商列表
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析(默认)
         """
-        prompt = self._build_stream_prompt(plans, suppliers, analyze_mode)
+        prompt = self._build_stream_prompt(plans, suppliers)
         system_prompt = "你是一个专业的电力物料采购供应商匹配专家，擅长分析供应商协议数据并给出最优的供应商选择方案。"
         async for chunk in self.llm_stream_func(prompt, system_prompt):
             yield chunk

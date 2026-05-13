@@ -527,70 +527,20 @@
                                 <label class="param-label">计划类型</label>
                                 <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划" value="">
                             </div>
-                            <div class="param-group">
-                                <label class="param-label">分析模式</label>
-                                <div class="radio-group">
-                                    <label class="radio-label" data-agent="allocation" data-mode="iterative">
-                                        <input type="radio" name="allocation-analyze-mode" value="iterative">
-                                        <span>🔄 迭代模式：逐个分析计划</span>
-                                    </label>
-                                    <label class="radio-label selected" data-agent="allocation" data-mode="batch">
-                                        <input type="radio" name="allocation-analyze-mode" value="batch" checked>
-                                        <span>📦 批量模式：一次性分析所有计划</span>
-                                    </label>
-                                </div>
-                            </div>
                         </div>
 
                         <div id="inventory-params" class="params-section" style="display: none;">
                             <div class="param-group">
-                                <label class="param-label">开始日期</label>
-                                <input type="text" class="param-input" id="inventory-start" placeholder="格式: YYYY-MM-DD" value="2026-05-10">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">结束日期</label>
-                                <input type="text" class="param-input" id="inventory-end" placeholder="格式: YYYY-MM-DD" value="2026-05-24">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">库存层级（逗号分隔）</label>
-                                <input type="text" class="param-input" id="inventory-levels" placeholder="区域库/周转库/终端库" value="周转库">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">物料编码（逗号分隔）</label>
-                                <input type="text" class="param-input" id="inventory-materials" placeholder="如: 500004650" value="500021433">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">分析模式</label>
-                                <div class="radio-group">
-                                    <label class="radio-label" data-agent="inventory" data-mode="iterative">
-                                        <input type="radio" name="inventory-analyze-mode" value="iterative">
-                                        <span>🔄 迭代模式：逐个分析组合</span>
-                                    </label>
-                                    <label class="radio-label selected" data-agent="inventory" data-mode="batch">
-                                        <input type="radio" name="inventory-analyze-mode" value="batch" checked>
-                                        <span>📦 批量模式：一次性分析所有组合</span>
-                                    </label>
-                                </div>
+                                <label class="param-label">仓库编码</label>
+                                <input type="text" class="param-input" id="inventory-warehouse" placeholder="如: MGA0，留空则查询所有仓库" value="MGA0">
                             </div>
                         </div>
 
                         <div id="supplier-params" class="params-section" style="display: none;">
                             <div class="param-group">
-                                <label class="param-label">计划数据（JSON格式）</label>
-                                <textarea class="param-input" id="supplier-plans" rows="6" placeholder='[{"planId": "P001", "materialCode": "500004650", "demandQty": 100, "unitPrice": 100.0}...]'>[{"planId": "1", "materialCode": "001001002", "materialDesc": "物料编码001001002-物料描述明细", "demandQty": 100, "warehouseCode": "WH001", "techSpecId": "TECH0000000001"}]</textarea>
-                                <div class="param-hint">留空则从数据库获取</div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">分析模式</label>
-                                <div class="radio-group">
-                                    <label class="radio-label" data-agent="supplier" data-mode="iterative">
-                                        <input type="radio" name="supplier-analyze-mode" value="iterative">
-                                        <span>🔄 迭代模式：逐个分析计划</span>
-                                    </label>
-                                    <label class="radio-label selected" data-agent="supplier" data-mode="batch">
-                                        <input type="radio" name="supplier-analyze-mode" value="batch" checked>
-                                        <span>📦 批量模式：一次性分析所有计划</span>
-                                    </label>
+                                <label class="param-label">计划数据</label>
+                                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; border: 2px solid #e0e0e0; font-size: 0.9rem; color: #667eea;">
+                                    📊 系统将自动从数据库获取补货计划数据
                                 </div>
                             </div>
                         </div>
@@ -620,12 +570,21 @@
                 <div class="panel-body">
                     <div class="response-header">
                         <span class="response-title" id="response-title">等待分析...</span>
-                        <div class="toggle-container">
-                            <span>显示思考过程</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="toggle-thinking" checked>
-                                <span class="toggle-slider"></span>
-                            </label>
+                        <div style="display: flex; gap: 16px; align-items: center;">
+                            <div class="toggle-container">
+                                <span>显示思考过程</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="toggle-thinking" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="toggle-container">
+                                <span>Mock 模式</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="toggle-mock">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                     <div class="response-area" id="response-area">
@@ -640,6 +599,7 @@
         let currentAgent = 'allocation';
         let isStreaming = false;
         let showThinking = true;
+        let useMock = false;
         let lastMessageDiv = null;
         let pendingContent = '';
         let parseTimeout = null;
@@ -656,23 +616,7 @@
             smartypants: true
         });
 
-        // 初始化分析模式选择
-        document.querySelectorAll('.radio-label').forEach(label => {
-            label.addEventListener('click', () => {
-                const agent = label.dataset.agent;
-                const mode = label.dataset.mode;
-                
-                document.querySelectorAll(`.radio-label[data-agent="${agent}"]`).forEach(l => {
-                    l.classList.remove('selected');
-                    const input = l.querySelector('input');
-                    if (input) input.checked = false;
-                });
-                
-                label.classList.add('selected');
-                const selectedInput = label.querySelector('input');
-                if (selectedInput) selectedInput.checked = true;
-            });
-        });
+        
 
         document.querySelectorAll('.agent-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -703,6 +647,7 @@
             const stopBtn = document.getElementById('btn-stop');
             const responseArea = document.getElementById('response-area');
             showThinking = document.getElementById('toggle-thinking').checked;
+            useMock = document.getElementById('toggle-mock').checked;
 
             // 重置会话状态
             currentSessionId = null;
@@ -926,11 +871,6 @@
             lastMessageDiv = null;
         });
 
-        function getAnalyzeMode(agent) {
-            const selected = document.querySelector(`.radio-label.selected[data-agent="${agent}"]`);
-            return selected ? selected.dataset.mode : 'iterative';
-        }
-
         function buildRequestData() {
             switch (currentAgent) {
                 case 'allocation':
@@ -943,31 +883,16 @@
                         demandEndDate: '',
                         planType: document.getElementById('allocation-plan-type').value || '',
                         materialCodes: parseCommaList(document.getElementById('allocation-materials').value),
-                        analyzeMode: getAnalyzeMode('allocation')
+                        mock: useMock
                     };
                 case 'inventory':
                     return {
-                        startDate: document.getElementById('inventory-start').value || null,
-                        endDate: document.getElementById('inventory-end').value || null,
-                        inventoryLevels: parseCommaList(document.getElementById('inventory-levels').value),
-                        materialCodes: parseCommaList(document.getElementById('inventory-materials').value),
-                        seasonFactorWeight: null,
-                        safetyRedundancyRatio: null,
-                        analyzeMode: getAnalyzeMode('inventory')
+                        warehouseCode: document.getElementById('inventory-warehouse').value || '',
+                        mock: useMock
                     };
                 case 'supplier':
-                    const plansText = document.getElementById('supplier-plans').value;
-                    let plans = null;
-                    if (plansText.trim()) {
-                        try {
-                            plans = JSON.parse(plansText);
-                        } catch (e) {
-                            console.warn('Invalid JSON, sending empty');
-                        }
-                    }
                     return {
-                        plans: plans,
-                        analyzeMode: getAnalyzeMode('supplier')
+                        mock: useMock
                     };
                 default:
                     return {};

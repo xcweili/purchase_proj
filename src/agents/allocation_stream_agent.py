@@ -281,8 +281,7 @@ class AllocationStreamAgent:
         self.llm_stream_func = llm_stream_func
 
     def _build_stream_prompt(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
-                             distances_map: Dict[str, float], strategy: str = 'time',
-                             analyze_mode: str = "iterative") -> str:
+                             distances_map: Dict[str, float], strategy: str = 'time') -> str:
         """构建流式接口的prompt
 
         Args:
@@ -290,7 +289,6 @@ class AllocationStreamAgent:
             stocks: 库存数据列表
             distances_map: 仓库距离映射
             strategy: 调配策略
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析
         """
         enriched_stocks = []
         for stock in stocks:
@@ -307,32 +305,23 @@ class AllocationStreamAgent:
         }
         strategy_desc = strategy_descriptions.get(strategy, strategy_descriptions['time'])
 
-        if analyze_mode == "batch":
-            prompt = STREAM_ALLOCATION_BATCH_PROMPT.format(
-                strategy_description=strategy_desc,
-                plan_count=len(plans),
-                plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
-                distances_json=json.dumps(distances_map, ensure_ascii=False, indent=2),
-                stocks_json=json.dumps(enriched_stocks, ensure_ascii=False, indent=2),
-                plan_id_placeholder="{plan_id}",
-                material_code_placeholder="{material_code}",
-                material_desc_placeholder="{material_desc}",
-                demand_qty_placeholder="{demand_qty}",
-                target_warehouse_placeholder="{target_warehouse}",
-                total_available_placeholder="{total_available}"
-            )
-        else:
-            prompt = STREAM_ALLOCATION_PROMPT.format(
-                strategy_description=strategy_desc,
-                plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
-                distances_json=json.dumps(distances_map, ensure_ascii=False, indent=2),
-                stocks_json=json.dumps(enriched_stocks, ensure_ascii=False, indent=2)
-            )
+        prompt = STREAM_ALLOCATION_BATCH_PROMPT.format(
+            strategy_description=strategy_desc,
+            plan_count=len(plans),
+            plans_json=json.dumps([_extract_plan_for_stream(p) for p in plans], ensure_ascii=False, indent=2),
+            distances_json=json.dumps(distances_map, ensure_ascii=False, indent=2),
+            stocks_json=json.dumps(enriched_stocks, ensure_ascii=False, indent=2),
+            plan_id_placeholder="{plan_id}",
+            material_code_placeholder="{material_code}",
+            material_desc_placeholder="{material_desc}",
+            demand_qty_placeholder="{demand_qty}",
+            target_warehouse_placeholder="{target_warehouse}",
+            total_available_placeholder="{total_available}"
+        )
         return prompt
 
     async def stream_analyze(self, plans: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
-                             distances_map: Dict[str, float], strategy: str = 'time',
-                             analyze_mode: str = "iterative"):
+                             distances_map: Dict[str, float], strategy: str = 'time'):
         """流式分析调配方案
 
         Args:
@@ -340,9 +329,8 @@ class AllocationStreamAgent:
             stocks: 库存数据列表
             distances_map: 仓库距离映射
             strategy: 调配策略
-            analyze_mode: 分析模式，"batch"一次性分析所有组合，"iterative"逐个分析(默认)
         """
-        prompt = self._build_stream_prompt(plans, stocks, distances_map, strategy, analyze_mode)
+        prompt = self._build_stream_prompt(plans, stocks, distances_map, strategy)
         system_prompt = "你是一个专业的电力物料仓库调配专家，擅长分析库存数据并给出最优调配方案。"
         async for chunk in self.llm_stream_func(prompt, system_prompt):
             yield chunk
