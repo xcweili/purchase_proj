@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 # ============================================
 # 模拟返回配置
 # ============================================
-MOCK_RESPONSE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "接口协议", "模拟返回")
+MOCK_RESPONSE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api_protocol", "mock_responses")
 MOCK_FILES = {
-    "allocation": os.path.join(MOCK_RESPONSE_DIR, "智能调配.md"),
-    "inventory": os.path.join(MOCK_RESPONSE_DIR, "库存分析.md"),
-    "supplier": os.path.join(MOCK_RESPONSE_DIR, "供应商匹配.md"),
+    "allocation": os.path.join(MOCK_RESPONSE_DIR, "allocation.md"),
+    "inventory": os.path.join(MOCK_RESPONSE_DIR, "inventory.md"),
+    "supplier": os.path.join(MOCK_RESPONSE_DIR, "supplier.md"),
 }
 
 async def mock_response_generator(agent_type: str):
-    """读取模拟返回文件并按批返回（每批约10行，保证响应速度和稳定性）"""
+    """读取模拟返回文件并按批返回（每批约10行，逐字流式输出）"""
     file_path = MOCK_FILES.get(agent_type)
     if not file_path or not os.path.exists(file_path):
         yield f"❌ 未找到 {agent_type} 的模拟返回文件\n"
@@ -53,6 +53,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from starlette.responses import Response
+from starlette.types import ASGIApp, Scope, Receive, Send
+
+class CORSPreflightMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http" and scope["method"] == "OPTIONS":
+            response = Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "86400",
+                    "Content-Length": "0",
+                },
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+app.add_middleware(CORSPreflightMiddleware)
 
 # ============================================
 # 会话管理器导入
@@ -85,16 +111,16 @@ class AllocationMatchRequest(BaseModel):
     demandEndDate: str = Field(default="", description="需求结束时间")
     planType: str = Field(default="", description="计划类型")
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMMDD）")
     endDate: Optional[str] = Field(default=None, description="结束日期（格式：YYYYMMDD）")
     warehouseCode: str = Field(default="", description="仓库编码，为空时查询所有仓库")
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class SupplierMatchRequest(BaseModel):
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
@@ -106,14 +132,6 @@ class ChatRequest(BaseModel):
 async def allocation_match_stream(request: AllocationMatchRequest):
     """智能调配接口 - 流式输出"""
     logger.info(request.strategy)
-    logger.info(request.warehouseCode)
-    logger.info(request.sourceType)
-    logger.info(request.projectUnit)
-    logger.info(request.demandStartDate)
-    logger.info(request.demandEndDate)
-    logger.info(request.planType)
-    logger.info(request.materialCodes)
-
     # 创建会话
     session_id = session_manager.create_session("allocation")
     strategy_val = request.strategy if request.strategy else "time"
@@ -179,8 +197,6 @@ async def allocation_match_stream(request: AllocationMatchRequest):
 @app.post("/api/inventory/analyze/stream")
 async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     """库存分析接口 - 流式输出"""
-    logger.info(request.startDate)
-    logger.info(request.endDate)
     logger.info(request.warehouseCode)
 
     # 创建会话
