@@ -417,6 +417,10 @@ async def shutdown_event():
 # ============================================
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse("static/favicon.ico") if os.path.exists("static/favicon.ico") else Response(status_code=204)
+
 @app.get("/")
 async def root():
     """首页 - 流式交互界面"""

@@ -47,3 +47,5 @@ temp/
 # SQL 查询文件（用户已删除）
 sql/*.py
 sql/*.sql
+
+node_modules/

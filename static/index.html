@@ -4,7 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>采购管理智能体 - 流式交互</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/marked.min.js"></script>
+    <script>
+        // 确保marked库可用，不可用时降级为纯文本
+        document.addEventListener('DOMContentLoaded', function() {
+            if (typeof marked === 'undefined') {
+                console.warn('marked库加载失败，降级为纯文本显示');
+                window.marked = {
+                    setOptions: function() {},
+                    parse: function(text) { return text.replace(/\n/g, '<br>'); }
+                };
+            }
+        });
+    </script>
     <style>
         * {
             margin: 0;

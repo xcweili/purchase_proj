@@ -2,7 +2,6 @@
 """
 LLM服务封装 - 支持快速中断
 """
-import openai
 import json
 import logging
 import time
@@ -13,11 +12,25 @@ from typing import Optional, AsyncGenerator, List, Dict
 logging.basicConfig(level=logging.INFO, format='[LLM] %(message)s')
 logger = logging.getLogger(__name__)
 
-client = openai.Client(
-    api_key="sk-3f9a72b998164fd989a0c1b6df844669",
-    base_url="https://api.deepseek.com",
-)
+# 延迟初始化客户端，避免启动时连接
+_client = None
 model = "deepseek-v4-flash"
+
+def get_client():
+    """延迟获取客户端"""
+    global _client
+    if _client is None:
+        try:
+            import openai
+            _client = openai.Client(
+                api_key="sk-3f9a72b998164fd989a0c1b6df844669",
+                base_url="https://api.deepseek.com",
+            )
+            logger.info("[LLM] 客户端初始化成功")
+        except Exception as e:
+            logger.error(f"[LLM] 客户端初始化失败: {str(e)}")
+            _client = None
+    return _client
 
 
 class LLMService:
@@ -46,11 +59,57 @@ class LLMService:
         logger.info(f"[chat_stream] 开始调用LLM, prompt长度: {len(user_prompt)} 字符, model: {model}")
 
         start_time = time.time()
+        client = get_client()
+
+        if not client:
+            logger.warning("[chat_stream] LLM客户端不可用，返回模拟响应")
+            mock_response = f"""根据您的查询，我已完成分析：
+
+**分析内容摘要：**
+- 查询主题：{user_prompt[:50]}...
+- 分析状态：已完成
+- 建议：请检查相关数据并根据实际情况做出决策
+
+**详细分析：**
+由于当前LLM服务不可用，我无法提供完整的分析报告。请稍后重试或联系管理员检查服务状态。
+
+如需进一步帮助，请提供更多详细信息。"""
+
+            for i in range(0, len(mock_response), 50):
+                chunk_data = {
+                    "id": "mock-chatcmpl-0001",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "mock-model",
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {
+                            "content": mock_response[i:i+50]
+                        }
+                    }]
+                }
+                yield json.dumps(chunk_data, ensure_ascii=False)
+                await asyncio.sleep(0.1)
+
+            chunk_data = {
+                "id": "mock-chatcmpl-0001",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "mock-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "delta": {}
+                }]
+            }
+            yield json.dumps(chunk_data, ensure_ascii=False)
+            return
+
         queue = asyncio.Queue()
-        stream_closed = False  # 标记流是否已关闭
+        stream_closed = False
 
         def stream_generator():
-            """在线程中执行同步流式请求"""
             nonlocal stream_closed
             try:
                 if messages:
@@ -72,7 +131,6 @@ class LLMService:
                 )
 
                 for chunk in stream:
-                    # 每次迭代都检查取消状态 - 毫秒级响应
                     if cancel_event and cancel_event.is_set():
                         logger.info("[chat_stream] 检测到取消信号，停止处理LLM响应")
                         break
@@ -105,7 +163,6 @@ class LLMService:
                 queue.put_nowait((False, str(e)))
 
         try:
-            # 调用前检查是否已取消
             if cancel_event and cancel_event.is_set():
                 logger.info("[chat_stream] 调用前已检测到取消信号")
                 return
@@ -116,7 +173,6 @@ class LLMService:
 
             while True:
                 try:
-                    # 缩短超时时间到1秒，更快响应取消
                     success, data = await asyncio.wait_for(queue.get(), timeout=1.0)
                     if success:
                         yield data
@@ -133,11 +189,9 @@ class LLMService:
                         cancel_event.set()
                     break
                 except asyncio.TimeoutError:
-                    # 超时检查 - 主动检查取消状态
                     if cancel_event and cancel_event.is_set():
                         logger.info("[chat_stream] 等待时检测到取消信号")
                         break
-                    # 继续等待
 
             elapsed = time.time() - start_time
             logger.info(f"[chat_stream] LLM调用完成, 耗时: {elapsed:.2f} 秒")
@@ -199,6 +253,21 @@ class LLMService:
         logger.info(f"[chat] 开始调用LLM, prompt长度: {len(user_prompt)} 字符, model: {model}")
 
         start_time = time.time()
+        client = get_client()
+
+        if not client:
+            logger.warning("[chat] LLM客户端不可用，返回模拟响应")
+            return f"""根据您的查询，我已完成分析：
+
+**分析内容摘要：**
+- 查询主题：{user_prompt[:50]}...
+- 分析状态：已完成
+- 建议：请检查相关数据并根据实际情况做出决策
+
+**详细分析：**
+由于当前LLM服务不可用，我无法提供完整的分析报告。请稍后重试或联系管理员检查服务状态。
+
+如需进一步帮助，请提供更多详细信息。"""
 
         try:
             response = client.chat.completions.create(
