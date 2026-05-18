@@ -20,7 +20,7 @@ class ContextManager:
     """上下文管理器 - 处理超长prompt的代码沙盒"""
 
     # Token估算：1 token ≈ 4 个中文字符
-    TOKEN_LIMIT = 64  # 64k token限制
+    TOKEN_LIMIT = 128000  # 128k token限制
     TOKEN_PER_CHAR = 0.25  # 每个字符约0.25 token
     SAFETY_MARGIN = 0.8  # 安全边际，使用80%的token
 

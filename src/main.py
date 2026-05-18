@@ -111,16 +111,16 @@ class AllocationMatchRequest(BaseModel):
     demandEndDate: str = Field(default="", description="需求结束时间")
     planType: str = Field(default="", description="计划类型")
     materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
-    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMMDD）")
     endDate: Optional[str] = Field(default=None, description="结束日期（格式：YYYYMMDD）")
     warehouseCode: str = Field(default="", description="仓库编码，为空时查询所有仓库")
-    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class SupplierMatchRequest(BaseModel):
-    mock: bool = Field(default=True, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
+    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")

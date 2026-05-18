@@ -10,49 +10,43 @@ from contextlib import asynccontextmanager
 logging.basicConfig(level=logging.INFO, format='[DB] %(message)s')
 logger = logging.getLogger(__name__)
 
-SQLITE_DB_PATH = 'purchase_management.db'
+# 导入数据库配置
+from ..config.db_config import (
+    CURRENT_DB_TYPE,
+    DB_TYPE_SQLITE,
+    DB_TYPE_MYSQL,
+    MYSQL_CONFIG,
+    SQLITE_DB_PATH
+)
 
 # ============================================
 # 数据库切换配置
 # ============================================
-# 当前使用: SQLite (默认)
-# 如需切换到MySQL，注释掉SQLite相关代码，取消注释MySQL相关代码，并安装pymysql: pip install pymysql
+# 当前使用: MySQL (默认)
+# 如需切换到SQLite，修改 db_config.py 中的 CURRENT_DB_TYPE = DB_TYPE_SQLITE
 # ============================================
-
-# MySQL配置 (待启用)
-# MYSQL_CONFIG = {
-#     'host': '192.168.1.1',
-#     'port': 3306,
-#     'user': 'root',
-#     'password': 'HN@123456',
-#     'database': 'ai',
-#     'charset': 'utf8mb4',
-#     'cursorclass': 'DictCursor'
-# }
-
-MYSQL_CONFIG = {
-    'host': '25.212.252.199',
-    'port': 13306,
-    'user': 'wztppt230',
-    'password': 'HNxt@2025',
-    'database': 'ai_project',
-    'charset': 'utf8mb4',
-    'cursorclass': 'DictCursor'
-}
 
 import pymysql
 from pymysql.cursors import DictCursor
 
+
 class RealDB:
-    """真实数据库操作类 - 使用 MySQL（带优雅降级，连接失败不阻塞启动）"""
+    """真实数据库操作类 - 支持MySQL和SQLite（带优雅降级，连接失败不阻塞启动）"""
 
     def __init__(self):
-        self.config = MYSQL_CONFIG
+        self.config = MYSQL_CONFIG if CURRENT_DB_TYPE == DB_TYPE_MYSQL else {'db_path': SQLITE_DB_PATH}
         self._db_available = False
         self._test_connection()
 
     def _test_connection(self):
         """测试数据库连接，失败时仅打印日志，不阻塞启动"""
+        if CURRENT_DB_TYPE == DB_TYPE_MYSQL:
+            self._test_mysql_connection()
+        else:
+            self._test_sqlite_connection()
+
+    def _test_mysql_connection(self):
+        """测试MySQL连接"""
         try:
             conn = pymysql.connect(
                 host=self.config['host'],
@@ -62,9 +56,9 @@ class RealDB:
                 database=self.config['database'],
                 charset=self.config['charset'],
                 cursorclass=DictCursor,
-                connect_timeout=5,
-                read_timeout=5,
-                write_timeout=5
+                connect_timeout=self.config.get('connect_timeout', 5),
+                read_timeout=self.config.get('read_timeout', 5),
+                write_timeout=self.config.get('write_timeout', 5)
             )
             conn.close()
             self._db_available = True
@@ -74,10 +68,30 @@ class RealDB:
             logger.warning(f"[DB] MySQL连接失败 ({self.config['host']}:{self.config['port']}), 数据库功能不可用: {str(e)}")
             logger.warning("[DB] 服务将继续启动，但所有数据库查询将返回空数据")
 
+    def _test_sqlite_connection(self):
+        """测试SQLite连接"""
+        try:
+            conn = sqlite3.connect(self.config['db_path'])
+            conn.close()
+            self._db_available = True
+            logger.info(f"[DB] SQLite连接成功: {self.config['db_path']}")
+        except Exception as e:
+            self._db_available = False
+            logger.warning(f"[DB] SQLite连接失败: {str(e)}")
+            logger.warning("[DB] 服务将继续启动，但所有数据库查询将返回空数据")
+
     def _get_connection(self):
-        """获取MySQL数据库连接"""
+        """获取数据库连接"""
         if not self._db_available:
             raise ConnectionError("数据库服务不可用")
+        
+        if CURRENT_DB_TYPE == DB_TYPE_MYSQL:
+            return self._get_mysql_connection()
+        else:
+            return self._get_sqlite_connection()
+
+    def _get_mysql_connection(self):
+        """获取MySQL数据库连接"""
         connection = pymysql.connect(
             host=self.config['host'],
             port=self.config['port'],
@@ -86,24 +100,17 @@ class RealDB:
             database=self.config['database'],
             charset=self.config['charset'],
             cursorclass=DictCursor,
-            connect_timeout=10,
-            read_timeout=30,
-            write_timeout=30
+            connect_timeout=self.config.get('connect_timeout', 10),
+            read_timeout=self.config.get('read_timeout', 30),
+            write_timeout=self.config.get('write_timeout', 30)
         )
         return connection
 
-
-# class RealDB:
-#     """真实数据库操作类 - 使用 SQLite"""
-
-#     def __init__(self):
-#         self.db_path = SQLITE_DB_PATH
-
-#     def _get_connection(self):
-#         """获取数据库连接"""
-#         conn = sqlite3.connect(self.db_path)
-#         conn.row_factory = sqlite3.Row
-#         return conn
+    def _get_sqlite_connection(self):
+        """获取SQLite数据库连接"""
+        conn = sqlite3.connect(self.config['db_path'])
+        conn.row_factory = sqlite3.Row
+        return conn
 
     async def fetch_inventory(self, material_code: int, warehouse_code: str):
         """获取库存数据 - 从w_stock_info_0808表查询"""
