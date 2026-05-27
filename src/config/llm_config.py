@@ -46,7 +46,7 @@ class LLMConfig:
                 api_key="7dee7bb6b44242538317ee52c544e0a4",
                 base_url="http://25.212.230.144:80/lmp-cloud-ias-server/api/llm/chat/completions/V2",
                 model="通义千问2.5-72B",
-                temperature=0.95,
+                temperature=0.1,
             ),
         }
 
