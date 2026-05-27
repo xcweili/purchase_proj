@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 from ..utils.context_manager import ContextManager
 from ..utils.session_manager import session_manager
+from ..utils.json_repair import JSONRepair, SmartJSONParser
 
 
 class SupplierMatchStreamService:
@@ -21,8 +22,11 @@ class SupplierMatchStreamService:
         self.llm_func = llm_func
         if llm_func:
             self.context_manager = ContextManager(llm_func, llm_stream_func)
+            # 初始化JSON解析器，集成双层保障机制
+            self.json_parser = SmartJSONParser(self.context_manager)
         else:
             self.context_manager = None
+            self.json_parser = SmartJSONParser(None)
 
     async def stream_analyze(self, session_id: str = None):
         """流式分析供应商匹配
@@ -426,7 +430,16 @@ class SupplierMatchStreamService:
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     def _parse_llm_chunk(self, chunk) -> Optional[str]:
-        """解析LLM返回的chunk，提取内容和思考过程"""
+        """解析LLM返回的chunk，提取内容和思考过程
+        
+        采用双层保障机制：
+        第一层保障：使用JSONRepair修复损坏的JSON
+        第二层保障：如果修复失败，返回原始字符串（保持原有行为）
+        """
+        if not chunk:
+            return None
+            
+        # 第一层保障：尝试修复并解析JSON
         try:
             # 如果chunk已经是列表或字典，直接使用
             if isinstance(chunk, (list, dict)):
@@ -434,7 +447,24 @@ class SupplierMatchStreamService:
             else:
                 # 尝试解析为JSON
                 data = json.loads(chunk)
-            
+        except json.JSONDecodeError:
+            # 直接解析失败，使用JSON修复工具
+            logger.warning(f"JSON解析失败，尝试修复: {str(chunk)[:100]}...")
+            if isinstance(chunk, str):
+                repaired_data = JSONRepair.repair_json(chunk)
+                if repaired_data is not None:
+                    logger.info("JSON修复成功")
+                    data = repaired_data
+                else:
+                    # 修复也失败，返回原始字符串（第二层保障）
+                    logger.warning("JSON修复失败，返回原始字符串")
+                    return chunk
+            else:
+                # 非字符串类型的chunk，直接返回
+                return chunk
+        
+        # 解析成功，提取内容
+        try:
             # 如果是列表，尝试提取第一个元素
             if isinstance(data, list):
                 if len(data) > 0 and isinstance(data[0], dict):
@@ -460,8 +490,8 @@ class SupplierMatchStreamService:
                 elif content:
                     return content
             return None
-        except json.JSONDecodeError:
-            # 如果不是有效JSON，直接返回原始字符串
+        except Exception as e:
+            logger.error(f"解析JSON内容失败: {str(e)}")
             if isinstance(chunk, str):
                 return chunk
         return None

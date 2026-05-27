@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 from ..utils.context_manager import ContextManager
 from ..utils.session_manager import session_manager
+from ..utils.json_repair import JSONRepair, SmartJSONParser
 
 
 class AllocationStreamService:
@@ -21,8 +22,11 @@ class AllocationStreamService:
         self.llm_func = llm_func
         if llm_func:
             self.context_manager = ContextManager(llm_func, llm_stream_func)
+            # 初始化JSON解析器，集成双层保障机制
+            self.json_parser = SmartJSONParser(self.context_manager)
         else:
             self.context_manager = None
+            self.json_parser = SmartJSONParser(None)
 
     async def stream_analyze(self, strategy: str = "time", warehouse_code: str = "",
                             source_type: str = "", project_unit: str = "",
@@ -472,9 +476,33 @@ class AllocationStreamService:
             yield f"   └─ 详细堆栈：{traceback.format_exc()}\n"
 
     def _parse_llm_chunk(self, chunk: str) -> Optional[str]:
-        """解析LLM返回的JSON格式chunk，提取内容和思考过程"""
+        """解析LLM返回的JSON格式chunk，提取内容和思考过程
+        
+        采用双层保障机制：
+        第一层保障：使用JSONRepair修复损坏的JSON
+        第二层保障：如果修复失败，返回原始字符串（保持原有行为）
+        """
+        if not chunk:
+            return None
+            
+        # 第一层保障：尝试修复并解析JSON
         try:
+            # 先尝试直接解析
             data = json.loads(chunk)
+        except json.JSONDecodeError:
+            # 直接解析失败，使用JSON修复工具
+            logger.warning(f"JSON解析失败，尝试修复: {chunk[:100]}...")
+            repaired_data = JSONRepair.repair_json(chunk)
+            if repaired_data is not None:
+                logger.info("JSON修复成功")
+                data = repaired_data
+            else:
+                # 修复也失败，返回原始字符串（第二层保障）
+                logger.warning("JSON修复失败，返回原始字符串")
+                return chunk
+        
+        # 解析成功，提取内容
+        try:
             if isinstance(data, list):
                 return chunk
             choices = data.get('choices', [])
@@ -488,9 +516,9 @@ class AllocationStreamService:
                 elif content:
                     return content
             return None
-        except json.JSONDecodeError:
+        except Exception as e:
+            logger.error(f"解析JSON内容失败: {str(e)}")
             return chunk
-        return None
 
     def _build_batch_prompt(self, all_plan_data: List[Dict[str, Any]], stocks: List[Dict[str, Any]],
                             strategy: str, target_warehouse: str) -> str:

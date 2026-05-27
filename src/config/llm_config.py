@@ -30,7 +30,8 @@ class LLMConfig:
     """LLM服务配置"""
     def __init__(self):
         # 当前使用的LLM提供商
-        self.current_provider: str = "tongyi"
+        self.current_provider: str = "deepseek"
+        # self.current_provider: str = "tongyi"
         
         # 各提供商配置
         self.providers: Dict[str, LLMProviderConfig] = {
