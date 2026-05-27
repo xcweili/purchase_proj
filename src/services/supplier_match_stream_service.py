@@ -243,11 +243,11 @@ class SupplierMatchStreamService:
             yield "────────────────────────────────────────\n"
 
             yield "\n💾 【数据持久化阶段】正在将分析结果存储到数据库...\n"
-            yield "   📌 当前需求：将JSON格式结果数据持久化到数据库\n"
+            yield "   📌 当前需求：将 JSON 格式结果数据持久化到数据库\n"
             yield "   📌 执行动作：\n"
-            yield "      • JSON解析：解析AI返回的JSON格式数据\n"
+            yield "      • JSON 解析：解析 AI 返回的 JSON 格式数据\n"
             yield "      • 数据验证：验证数据完整性和格式正确性\n"
-            yield "      • 数据转换：将JSON数据转换为数据库记录\n"
+            yield "      • 数据转换：将 JSON 数据转换为数据库记录\n"
             yield "      • 数据插入：执行数据库插入操作\n"
             yield "      • 日志记录：记录分析日志和审计信息\n"
             yield "   📌 数据用途：\n"
@@ -260,6 +260,38 @@ class SupplierMatchStreamService:
             saved_count = 0
             failed_count = 0
             parse_errors = []
+            
+            # 检查是否需要触发沙盒兜底（当 AI 返回结果为空时）
+            needs_sandbox_fallback = False
+            for plan_data in all_plan_data:
+                if not plan_data.get('result'):
+                    needs_sandbox_fallback = True
+                    break
+            
+            if needs_sandbox_fallback and self.context_manager:
+                yield "⚠️ 检测到 AI 返回结果为空，触发代码沙盒兜底计算...\n"
+                logger.info("AI 返回结果为空，触发沙盒兜底")
+                
+                # 重新构建 prompt 并执行沙盒计算
+                prompt = self._build_batch_prompt(all_plan_data, all_suppliers)
+                system_prompt = "你是一位资深的电力物料供应商匹配专家，具备卓越的供应商分析和匹配能力。请运用高级智能算法进行供应商匹配分析。"
+                
+                # 执行沙盒计算获取结构化数据
+                sandbox_result = await self.context_manager._sandbox_execution(
+                    prompt, system_prompt, 'supplier', {'plans': all_plan_data, 'suppliers': all_suppliers}
+                )
+                
+                # 将沙盒计算结果应用到 plan_data
+                structured_data = sandbox_result.get('structured_data', [])
+                if structured_data and len(structured_data) == len(all_plan_data):
+                    for i, plan_data in enumerate(all_plan_data):
+                        if i < len(structured_data):
+                            plan_data['result'] = structured_data[i]
+                    logger.info(f"沙盒兜底成功，应用 {len(structured_data)} 条结构化数据")
+                    yield "✅ 代码沙盒兜底计算完成，数据已修复\n"
+                else:
+                    logger.warning(f"沙盒兜底数据不匹配：期望{len(all_plan_data)}条，实际{len(structured_data) if structured_data else 0}条")
+                    yield "⚠️ 代码沙盒兜底数据不匹配，将使用基础数据计算\n"
             
             # 辅助函数：获取策略名称
             def get_strategy_name(strategy_code):

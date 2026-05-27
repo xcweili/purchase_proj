@@ -1,87 +1,88 @@
 # -*- coding: utf-8 -*-
-"""JSON修复工具 - 提供双层保障机制"""
+"""JSON 修复工具 - 提供双层保障机制"""
 import json
 import logging
 from typing import Any, Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入repair包，如果失败则使用内置修复方案
+# 尝试导入 json-repair 包，如果失败则使用内置修复方案
 try:
-    import repair
-    REPAIR_AVAILABLE = True
+    from json_repair import repair_json as json_repair_func
+    JSON_REPAIR_AVAILABLE = True
+    logger.info("json-repair 包已安装，将使用外部 JSON 修复方案")
 except ImportError:
-    REPAIR_AVAILABLE = False
-    logger.warning("repair包未安装，将使用内置JSON修复方案")
+    JSON_REPAIR_AVAILABLE = False
+    logger.warning("json-repair 包未安装，将使用内置 JSON 修复方案")
 
 
 class JSONRepair:
-    """JSON修复工具类 - 提供双层保障机制
+    """JSON 修复工具类 - 提供双层保障机制
     
-    第一层保障：使用repair包或内置方法修复损坏的JSON
+    第一层保障：使用 json-repair 包或内置方法修复损坏的 JSON
     第二层保障：调用代码沙盒模式进行兜底处理
     """
 
     @staticmethod
     def repair_json(json_str: str) -> Optional[Any]:
         """
-        修复损坏的JSON字符串
+        修复损坏的 JSON 字符串
         
-        第一层保障：尝试多种方法修复JSON
+        第一层保障：尝试多种方法修复 JSON
         1. 尝试直接解析
-        2. 使用repair包修复（如果可用）
+        2. 使用 json-repair 包修复（如果可用）
         3. 使用内置修复方法
         
         Args:
-            json_str: 可能损坏的JSON字符串
+            json_str: 可能损坏的 JSON 字符串
             
         Returns:
-            解析后的Python对象（dict或list），如果无法修复返回None
+            解析后的 Python 对象（dict 或 list），如果无法修复返回 None
         """
-        # 方法1：直接解析
+        # 方法 1：直接解析
         try:
             result = json.loads(json_str)
             return result
         except json.JSONDecodeError:
             pass
 
-        # 方法2：使用repair包（如果可用）
-        if REPAIR_AVAILABLE:
+        # 方法 2：使用 json-repair 包（如果可用）
+        if JSON_REPAIR_AVAILABLE:
             try:
-                repaired = repair.fix(json_str)
+                repaired = json_repair_func(json_str)
                 if repaired:
-                    result = json.loads(repaired)
-                    logger.info("JSON修复成功（使用repair包）")
+                    result = json.loads(repaired) if isinstance(repaired, str) else repaired
+                    logger.info("JSON 修复成功（使用 json-repair 包）")
                     return result
             except Exception as e:
-                logger.warning(f"repair包修复失败: {str(e)}")
+                logger.warning(f"json-repair 包修复失败：{str(e)}")
 
-        # 方法3：内置修复方法
+        # 方法 3：内置修复方法
         try:
             repaired = JSONRepair._simple_repair(json_str)
             if repaired:
                 result = json.loads(repaired)
-                logger.info("JSON修复成功（使用内置方法）")
+                logger.info("JSON 修复成功（使用内置方法）")
                 return result
         except Exception as e:
-            logger.warning(f"内置修复方法失败: {str(e)}")
+            logger.warning(f"内置修复方法失败：{str(e)}")
 
-        # 方法4：尝试提取JSON片段
+        # 方法 4：尝试提取 JSON 片段
         try:
             result = JSONRepair._extract_json_fragment(json_str)
             if result:
-                logger.info("JSON修复成功（使用片段提取）")
+                logger.info("JSON 修复成功（使用片段提取）")
                 return result
         except Exception as e:
-            logger.warning(f"片段提取失败: {str(e)}")
+            logger.warning(f"片段提取失败：{str(e)}")
 
-        logger.error(f"无法修复JSON: {json_str[:200]}...")
+        logger.error(f"无法修复 JSON: {json_str[:200]}...")
         return None
 
     @staticmethod
     def _simple_repair(json_str: str) -> Optional[str]:
         """
-        简单的JSON修复方法
+        简单的 JSON 修复方法
         
         修复常见问题：
         1. 修复不完整的引号
@@ -124,7 +125,7 @@ class JSONRepair:
                     quote_stack.append('"')
                 result.append(char)
             elif char == "'" and (i == 0 or s[i-1] != '\\'):
-                # 将单引号转换为双引号（JSON标准）
+                # 将单引号转换为双引号（JSON 标准）
                 if quote_stack and quote_stack[-1] == "'":
                     quote_stack.pop()
                     result.append('"')
@@ -177,7 +178,7 @@ class JSONRepair:
 
     @staticmethod
     def _extract_json_fragment(json_str: str) -> Optional[Any]:
-        """尝试从文本中提取JSON片段"""
+        """尝试从文本中提取 JSON 片段"""
         # 找到第一个 { 或 [
         start_idx = min(
             json_str.find('{') if '{' in json_str else len(json_str),
@@ -209,92 +210,23 @@ class JSONRepair:
 
 
 class SmartJSONParser:
-    """智能JSON解析器 - 集成双层保障机制"""
+    """智能 JSON 解析器 - 提供 JSON 修复能力"""
 
     def __init__(self, context_manager=None):
         """
         Args:
-            context_manager: ContextManager实例，用于第二层兜底
+            context_manager: ContextManager 实例（保留用于未来扩展）
         """
         self.context_manager = context_manager
 
-    async def parse_with_fallback(self, 
-                                json_str: str, 
-                                data_type: str = 'inventory',
-                                original_data: Optional[Dict[str, Any]] = None,
-                                prompt: str = "",
-                                system_prompt: str = "") -> Any:
+    def parse(self, json_str: str) -> Optional[Any]:
         """
-        使用双层保障机制解析JSON
-        
-        第一层保障：修复并解析JSON
-        第二层保障：如果解析失败，使用代码沙盒模式兜底
+        解析 JSON 字符串（使用第一层保障：JSON 修复）
         
         Args:
-            json_str: JSON字符串
-            data_type: 数据类型（inventory/allocation/supplier）
-            original_data: 原始数据，用于兜底时传递给代码沙盒
-            prompt: 原始prompt，用于兜底时重新构建
-            system_prompt: 系统prompt
+            json_str: JSON 字符串
             
         Returns:
-            解析结果
-        """
-        # 第一层保障：尝试修复并解析JSON
-        result = JSONRepair.repair_json(json_str)
-        
-        if result is not None:
-            logger.info(f"JSON解析成功（第一层保障），数据类型: {data_type}")
-            return result
-
-        # 第二层保障：使用代码沙盒模式兜底
-        logger.warning(f"JSON解析失败，触发第二层保障（代码沙盒模式），数据类型: {data_type}")
-        
-        if self.context_manager and original_data:
-            try:
-                # 调用代码沙盒执行模式
-                result = await self.context_manager._sandbox_execution(
-                    prompt, 
-                    system_prompt, 
-                    data_type, 
-                    original_data
-                )
-                logger.info("代码沙盒兜底成功")
-                return result
-            except Exception as e:
-                logger.error(f"代码沙盒兜底失败: {str(e)}")
-                raise
-        else:
-            logger.error("无法执行第二层保障：context_manager未配置或缺少原始数据")
-            raise ValueError("JSON解析失败且无法执行兜底")
-
-    def parse_simple(self, json_str: str) -> Optional[Any]:
-        """
-        简单解析JSON（仅使用第一层保障）
-        
-        Args:
-            json_str: JSON字符串
-            
-        Returns:
-            解析结果，如果无法修复返回None
+            解析结果，如果无法修复返回 None
         """
         return JSONRepair.repair_json(json_str)
-
-
-# 全局JSON解析器实例
-_json_parser = None
-
-
-def get_json_parser(context_manager=None):
-    """获取全局JSON解析器实例"""
-    global _json_parser
-    if _json_parser is None:
-        _json_parser = SmartJSONParser(context_manager)
-    return _json_parser
-
-
-def init_json_parser(context_manager=None):
-    """初始化全局JSON解析器"""
-    global _json_parser
-    _json_parser = SmartJSONParser(context_manager)
-    return _json_parser
