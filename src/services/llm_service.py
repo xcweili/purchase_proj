@@ -170,13 +170,13 @@ async def tongyi_stream_request(provider_config, messages, temperature, max_toke
                     queue.put_nowait((False, f"请求失败: {response.status}"))
                     return
                 
-                async for chunk in response.content.iter_chunks():
+                async for chunk_bytes, is_last in response.content.iter_chunks():
                     if cancel_event and cancel_event.is_set():
                         logger.info("[tongyi_stream] 检测到取消信号")
                         break
                     
-                    if chunk[1]:
-                        chunk_str = chunk[1].decode('utf-8', errors='ignore')
+                    if chunk_bytes:
+                        chunk_str = chunk_bytes.decode('utf-8', errors='ignore')
                         parsed = parse_tongyi_stream_response(chunk_str)
                         if parsed:
                             await queue.put((True, parsed + '\n'))
