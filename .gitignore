@@ -49,3 +49,5 @@ sql/*.py
 sql/*.sql
 
 node_modules/
+
+.tar
