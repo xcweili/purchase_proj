@@ -762,7 +762,7 @@ class InventoryAnalysisStreamService:
             choices = data.get('choices', [])
             if choices:
                 delta = choices[0].get('delta', {})
-                reasoning = delta.get('reasoning_content', '')
+                reasoning = delta.get('reasoning_content', '') or delta.get('reasoning', '') or delta.get('thinking', '')
                 content = delta.get('content', '')
 
                 if reasoning:

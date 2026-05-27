@@ -52,7 +52,7 @@ def parse_tongyi_stream_response(chunk_str: str) -> Optional[str]:
     解析通义千问流式响应格式
     输入格式: data:{"id":"xxx","appId":"xxx","globalTraceId":"xxx","object":"chat.completion.chunk","created":xxx,"choices":[...],"logprobs":null,"index":0,"delta":{"role":"assistant","content":"xxx"},"isSentitiveWord":false}
     
-    转换为标准格式: {"id":"xxx","object":"chat.completion.chunk","created":xxx,"model":"xxx","choices":[{"index":0,"finish_reason":null,"delta":{"content":"xxx"}}]}
+    转换为标准格式: {"id":"xxx","object":"chat.completion.chunk","created":xxx,"model":"xxx","choices":[{"index":0,"finish_reason":null,"delta":{"content":"xxx","reasoning":"xxx"}}]}
     """
     try:
         # 移除 data: 前缀
@@ -95,11 +95,16 @@ def parse_tongyi_stream_response(chunk_str: str) -> Optional[str]:
                 except:
                     delta = {"content": delta}
             
+            # 提取思考过程，支持多个可能的字段名
+            reasoning = delta.get("reasoning_content", "") or delta.get("reasoning", "") or delta.get("thinking", "")
+            content = delta.get("content", "")
+            
             result["choices"].append({
                 "index": choice.get("index", 0),
                 "finish_reason": choice.get("finish_reason", None),
                 "delta": {
-                    "content": delta.get("content", "")
+                    "content": content,
+                    "reasoning": reasoning
                 }
             })
         else:
@@ -111,11 +116,16 @@ def parse_tongyi_stream_response(chunk_str: str) -> Optional[str]:
                 except:
                     delta = {"content": delta}
             
+            # 提取思考过程，支持多个可能的字段名
+            reasoning = delta.get("reasoning_content", "") or delta.get("reasoning", "") or delta.get("thinking", "")
+            content = delta.get("content", "")
+            
             result["choices"].append({
                 "index": data.get("index", 0),
                 "finish_reason": None,
                 "delta": {
-                    "content": delta.get("content", "")
+                    "content": content,
+                    "reasoning": reasoning
                 }
             })
         
