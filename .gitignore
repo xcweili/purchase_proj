@@ -50,4 +50,4 @@ sql/*.sql
 
 node_modules/
 
-.tar
+*.tar
