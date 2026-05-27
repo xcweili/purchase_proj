@@ -132,7 +132,7 @@ def parse_tongyi_stream_response(chunk_str: str) -> Optional[str]:
         return json.dumps(result, ensure_ascii=False)
     
     except Exception as e:
-        logger.error(f"[LLM] 解析通义千问响应失败: {str(e)}, 原始数据: {chunk_str[:200]}")
+        logger.error(f"[LLM] 解析通义千问响应失败: {str(e)}, 原始数据: {chunk_str}")
         return None
 
 
@@ -170,17 +170,18 @@ async def tongyi_stream_request(provider_config, messages, temperature, max_toke
                     queue.put_nowait((False, f"请求失败: {response.status}"))
                     return
                 
-                async for chunk_bytes, is_last in response.content.iter_chunks():
+                async for line in response.content:
                     if cancel_event and cancel_event.is_set():
                         logger.info("[tongyi_stream] 检测到取消信号")
                         break
                     
-                    if chunk_bytes:
-                        chunk_str = chunk_bytes.decode('utf-8', errors='ignore')
-                        parsed = parse_tongyi_stream_response(chunk_str)
-                        if parsed:
-                            await queue.put((True, parsed + '\n'))
-        
+                    if line:
+                        line_str = line.decode('utf-8', errors='ignore').strip()
+                        if line_str:
+                            parsed = parse_tongyi_stream_response(line_str)
+                            if parsed:
+                                await queue.put((True, parsed + '\n'))
+    
         await queue.put((False, None))
     except asyncio.CancelledError:
         logger.info("[tongyi_stream] 请求被取消")
