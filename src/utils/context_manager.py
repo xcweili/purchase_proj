@@ -2,7 +2,7 @@
 """上下文管理器 - 处理超长prompt的代码沙盒执行"""
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from .code_sandbox import (
     code_sandbox, 
     INVENTORY_ANALYSIS_SCRIPT, 
@@ -125,9 +125,13 @@ class ContextManager:
         yield "🔢 **[数据计算阶段] 正在使用代码沙盒进行数据计算...**\n"
         result = await self._execute_analysis_algorithm(data, data_type, original_data)
 
+        # 将计算结果写回 original_data，供服务层持久化使用
+        structured_data = result.get('results', [])
+        if structured_data:
+            self._map_algorithm_results_to_data(structured_data, data_type, original_data)
+
         # 输出计算结果摘要（一次性拼接，让 \\n 保留在字符串中间不被 strip 吃掉）
         summary = result.get('summary', {})
-        structured_data = result.get('results', [])
 
         summary_lines = []
         summary_lines.append("")
@@ -186,6 +190,10 @@ class ContextManager:
                     # '历史出库' → 'outbound_history'
                     if '历史出库' in normalized_item and 'outbound_history' not in normalized_item:
                         normalized_item['outbound_history'] = normalized_item.pop('历史出库')
+                    # 归一化 outbound_history 内部字段：'出库数量' → 'outbound_qty'
+                    for ob in normalized_item.get('outbound_history', []):
+                        if '出库数量' in ob and 'outbound_qty' not in ob:
+                            ob['outbound_qty'] = ob.pop('出库数量')
                     normalized_data.append(normalized_item)
                 
                 # 调用库存分析算法
@@ -338,6 +346,96 @@ class ContextManager:
         full_prompt += "- 语言风格要保持专业性和逻辑性，确保读者能快速理解并采取行动"
 
         return full_prompt
+
+    def _map_algorithm_results_to_data(self, structured_data: List[Dict], data_type: str, original_data) -> None:
+        """将算法计算的结构化结果映射到原始数据的 result 字段"""
+        if data_type == 'inventory' and isinstance(original_data, list):
+            for idx, sd in enumerate(structured_data):
+                if idx < len(original_data):
+                    original_data[idx]['result'] = {
+                        'emergencyLine': sd.get('emergency_line', 0),
+                        'replenishLevel': sd.get('replenish_line', 0),
+                        'highLevel': sd.get('high_line', 0),
+                        'currentStock': sd.get('current_stock', 0),
+                        'inTransitQty': sd.get('in_transit_stock', 0),
+                        'stockStatus': sd.get('stock_status', ''),
+                        'suggestedAction': sd.get('suggested_action', ''),
+                        'suggestedQty': sd.get('recommended_qty', 0),
+                        'warehouseName': sd.get('warehouse_name', ''),
+                        'materialDesc': sd.get('material_desc', ''),
+                        '统计数据': sd.get('statistics', {}),
+                    }
+        elif data_type in ('allocation', 'supplier') and isinstance(original_data, dict):
+            plans = original_data.get('plans', [])
+            for idx, sd in enumerate(structured_data):
+                if idx < len(plans):
+                    plans[idx]['result'] = sd
+
+    def _extract_json_from_response(self, full_response: str) -> Optional[List[Dict]]:
+        """从LLM的完整Markdown响应中提取JSON结构化数据"""
+        import re
+        patterns = [
+            r'```json\s*\n(.+?)\n\s*```',
+            r'```\s*\n(.+?)\n\s*```',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, full_response, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                    results = data.get('results', [])
+                    if results:
+                        return results
+                except Exception:
+                    continue
+        start = full_response.rfind('{')
+        end = full_response.rfind('}')
+        if start != -1 and end != -1 and start < end:
+            try:
+                data = json.loads(full_response[start:end+1])
+                results = data.get('results', [])
+                if results:
+                    return results
+            except Exception:
+                pass
+        return None
+
+    def _map_json_results_to_data(self, results: List[Dict], data_type: str, original_data) -> bool:
+        """将LLM返回的JSON结果映射到原始数据"""
+        try:
+            if data_type == 'inventory' and isinstance(original_data, list):
+                for i, item in enumerate(results):
+                    if i < len(original_data):
+                        original_data[i]['result'] = {
+                            'emergencyLine': item.get('emergencyLine', item.get('emergency_line', 0)),
+                            'replenishLevel': item.get('replenishLine', item.get('replenish_line', 0)),
+                            'highLevel': item.get('highLine', item.get('high_line', 0)),
+                            'currentStock': item.get('currentStock', item.get('current_stock', 0)),
+                            'inTransitQty': item.get('inTransitStock', item.get('in_transit_stock', 0)),
+                            'stockStatus': item.get('stockStatus', item.get('waterLevelStatusName', item.get('stock_status', ''))),
+                            'suggestedAction': item.get('suggestedAction', item.get('suggested_action', '')),
+                            'suggestedQty': item.get('suggestedQty', item.get('recommended_qty', 0)),
+                            'warehouseName': item.get('warehouseName', item.get('warehouse_name', '')),
+                            'materialDesc': item.get('materialDesc', item.get('material_desc', '')),
+                        }
+                return True
+            elif data_type in ('allocation', 'supplier') and isinstance(original_data, dict):
+                plans = original_data.get('plans', [])
+                for i, item in enumerate(results):
+                    if i < len(plans):
+                        plans[i]['result'] = item
+                return True
+        except Exception:
+            pass
+        return False
+
+    async def _run_algorithm_fallback(self, data_type: str, original_data) -> Dict[str, Any]:
+        """仅运行算法计算，不调用LLM，用于结构化数据兜底"""
+        result = await self._execute_analysis_algorithm({}, data_type, original_data)
+        structured_data = result.get('results', [])
+        if structured_data:
+            self._map_algorithm_results_to_data(structured_data, data_type, original_data)
+        return result
 
     def _get_agent_summary(self, data_type: str, calculation_result: Any, original_data: Dict[str, Any] = None) -> str:
         """生成智能体处理摘要，包含字段映射和样例数据"""

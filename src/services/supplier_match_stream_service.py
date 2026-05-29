@@ -205,6 +205,9 @@ class SupplierMatchStreamService:
             # 获取会话的取消事件
             cancel_event = session_manager.get_cancel_event(session_id) if session_id else None
 
+            # 用于非沙盒模式下积累完整响应
+            full_response = None
+
             if self.context_manager and self.context_manager.is_too_long(prompt):
                 yield "⚠️ 检测到数据量较大，将采用代码沙盒模式...\n"
                 logger.info("prompt过长, 启用分层推理模式")
@@ -218,9 +221,12 @@ class SupplierMatchStreamService:
                         yield content
             else:
                 # 调用LLM流式API，传入cancel_event实现快速中断
+                # 积累完整响应，用于后续提取JSON结构化数据
+                full_response = ''
                 async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                     content = self._parse_llm_chunk(chunk)
                     if content:
+                        full_response += content
                         yield content
 
             yield "\n\n📊 【数据处理阶段】AI分析完成，正在进行结果解析...\n"
@@ -261,7 +267,19 @@ class SupplierMatchStreamService:
             failed_count = 0
             parse_errors = []
             
-            # 检查是否需要触发沙盒兜底（当 AI 返回结果为空时）
+            # 非沙盒模式：尝试从LLM完整响应中提取JSON结构化数据
+            if full_response is not None:
+                original_data = {'plans': all_plan_data, 'suppliers': all_suppliers}
+                json_results = self.context_manager._extract_json_from_response(full_response) if self.context_manager else None
+                if json_results:
+                    self.context_manager._map_json_results_to_data(json_results, 'supplier', original_data)
+                    logger.info(f"从LLM响应中提取JSON成功，应用 {len(json_results)} 条结构化数据")
+                else:
+                    logger.info("从LLM响应中提取JSON失败，将使用算法兜底")
+            else:
+                logger.info("沙盒模式：result已由_streaming_sandbox_execution写入")
+            
+            # 检查是否需要算法兜底（当 result 仍为空时）
             needs_sandbox_fallback = False
             for plan_data in all_plan_data:
                 if not plan_data.get('result'):
@@ -269,29 +287,12 @@ class SupplierMatchStreamService:
                     break
             
             if needs_sandbox_fallback and self.context_manager:
-                yield "⚠️ 检测到 AI 返回结果为空，触发代码沙盒兜底计算...\n"
-                logger.info("AI 返回结果为空，触发沙盒兜底")
+                yield "⚠️ 检测到结构化数据为空，触发代码算法兜底计算...\n"
+                logger.info("结构化数据为空，触发算法兜底")
                 
-                # 重新构建 prompt 并执行沙盒计算
-                prompt = self._build_batch_prompt(all_plan_data, all_suppliers)
-                system_prompt = "你是一位资深的电力物料供应商匹配专家，具备卓越的供应商分析和匹配能力。请运用高级智能算法进行供应商匹配分析。"
-                
-                # 执行沙盒计算获取结构化数据
-                sandbox_result = await self.context_manager._sandbox_execution(
-                    prompt, system_prompt, 'supplier', {'plans': all_plan_data, 'suppliers': all_suppliers}
-                )
-                
-                # 将沙盒计算结果应用到 plan_data
-                structured_data = sandbox_result.get('structured_data', [])
-                if structured_data and len(structured_data) == len(all_plan_data):
-                    for i, plan_data in enumerate(all_plan_data):
-                        if i < len(structured_data):
-                            plan_data['result'] = structured_data[i]
-                    logger.info(f"沙盒兜底成功，应用 {len(structured_data)} 条结构化数据")
-                    yield "✅ 代码沙盒兜底计算完成，数据已修复\n"
-                else:
-                    logger.warning(f"沙盒兜底数据不匹配：期望{len(all_plan_data)}条，实际{len(structured_data) if structured_data else 0}条")
-                    yield "⚠️ 代码沙盒兜底数据不匹配，将使用基础数据计算\n"
+                await self.context_manager._run_algorithm_fallback('supplier', {'plans': all_plan_data, 'suppliers': all_suppliers})
+                logger.info(f"算法兜底完成")
+                yield "✅ 代码算法兜底计算完成\n"
             
             # 辅助函数：获取策略名称
             def get_strategy_name(strategy_code):
@@ -464,12 +465,21 @@ class SupplierMatchStreamService:
     def _parse_llm_chunk(self, chunk) -> Optional[str]:
         """解析LLM返回的chunk，提取内容和思考过程
         
+        区分两种模式：
+        - 纯文本模式（沙盒计算阶段输出）：直接透传
+        - JSON模式（LLM流式响应）：解析后提取 content / reasoning_content
+        
         采用双层保障机制：
         第一层保障：使用JSONRepair修复损坏的JSON
         第二层保障：如果修复失败，返回原始字符串（保持原有行为）
         """
         if not chunk:
             return None
+        
+        if isinstance(chunk, str):
+            stripped = chunk.strip()
+            if stripped and not (stripped.startswith('{') or stripped.startswith('[')):
+                return chunk
             
         # 第一层保障：尝试修复并解析JSON
         try:
