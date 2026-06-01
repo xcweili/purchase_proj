@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -223,11 +224,30 @@ class SupplierMatchStreamService:
                 # 调用LLM流式API，传入cancel_event实现快速中断
                 # 积累完整响应，用于后续提取JSON结构化数据
                 full_response = ''
+                json_section_started = False
+                progress_messages = [
+                    "   ├─ 正在将供应商匹配结果编码为结构化数据...\n",
+                    "   ├─ 正在进行多维度匹配数据校验...\n",
+                    "   ├─ 正在生成最优供应商建议数据...\n",
+                ]
+                msg_idx = 0
+                last_progress_time = 0
                 async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         full_response += content
-                        yield content
+                        if not json_section_started:
+                            if '```json' in full_response:
+                                json_section_started = True
+                                last_progress_time = time.time()
+                                continue
+                            yield content
+                        else:
+                            now = time.time()
+                            if now - last_progress_time >= 3 and msg_idx < len(progress_messages):
+                                yield progress_messages[msg_idx]
+                                msg_idx += 1
+                                last_progress_time = now
 
             yield "\n\n📊 【数据处理阶段】AI分析完成，正在进行结果解析...\n"
             yield "   📌 当前需求：从AI分析结果中提取结构化数据\n"
@@ -628,6 +648,44 @@ class SupplierMatchStreamService:
 **然后继续输出计划2，计划3...直到所有{len(plans_formatted)}个计划都分析完毕**
 
 请用简洁、清晰的语言进行分析。
+
+---
+
+### 阶段二：JSON格式输出（非常重要）
+
+在完成所有分析报告的Markdown输出后，请在最后单独输出一个JSON格式的结构化数据，用于系统入库存储。
+
+**JSON格式要求**：
+```json
+{{
+  "total": {len(plans_formatted)},
+  "matchedPlans": [已匹配数量],
+  "unmatchedPlans": [未匹配数量],
+  "suggestion": "[综合建议]",
+  "results": [
+    {{
+      "planId": "计划ID",
+      "materialCode": "物料编码",
+      "demandQty": [需求数量],
+      "matchStatus": "matched|partial|unmatched",
+      "matchStatusName": "已匹配|部分匹配|未匹配",
+      "selectedSuppliers": [
+        {{
+          "supplierCode": "供应商编码",
+          "supplierName": "供应商名称",
+          "allocatedQty": [分配数量],
+          "unitPrice": [协议单价]
+        }}
+      ],
+      "suggestion": "[处理建议]"
+    }}
+  ]
+}}
+```
+
+**⚠️ 数据一致性要求**：
+- JSON中的数据必须与前面分析报告中的数据**完全一致**
+- 计划顺序必须与输入数据顺序保持一致
 """
         return prompt
 
