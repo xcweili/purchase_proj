@@ -261,10 +261,13 @@ class InventoryAnalysisStreamService:
             yield "      • 库存查询：查询当前库存和在途库存\n"
             yield "      • 出库查询：查询历史出库数据（用于预测）\n"
             yield "      • 统计计算：计算最高、最低、平均、中位数等指标\n"
-            yield "   └─ 正在批量提取数据...\n"
+            yield "   └─ 正在分析数据...\n"
 
             batch_stock = await self._batch_get_current_stock(all_combinations)
             batch_outbound = await self._batch_get_outbound_data(all_combinations)
+
+            total = len(all_combinations)
+            last_report_pct = 0
 
             for idx, combo in enumerate(all_combinations, 1):
                 # 每处理一个组合前检查会话是否已取消
@@ -310,7 +313,10 @@ class InventoryAnalysisStreamService:
                 }
                 all_combo_data.append(combo_data)
 
-                yield f"   [{idx}/{len(all_combinations)}] {warehouse_code} × {material_code} × {tech_id} - 库存: {current_stock + in_transit_stock}\n"
+                pct = idx * 100 // total
+                if pct >= last_report_pct + 5:
+                    last_report_pct = pct
+                    yield f"   ├─ 进度 {pct}% ({idx}/{total}) | 当前: {warehouse_code} × {material_code} \n"
 
             yield f"\n✅ 数据预处理完成\n"
             yield f"   └─ 共收集到 {len(all_combo_data)} 个组合的完整数据\n"
