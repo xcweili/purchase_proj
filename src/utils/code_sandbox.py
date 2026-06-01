@@ -241,16 +241,16 @@ def analyze_inventory_item(inventory_item: dict) -> dict:
     # 判断库存状态
     if available_stock <= emergency_line:
         stock_status = '紧急'
-        suggested_action = '立即紧急补货'
+        suggested_action = '立即补库'
     elif available_stock <= replenish_line:
         stock_status = '低'
-        suggested_action = '立即补货'
+        suggested_action = '立即补库'
     elif available_stock <= high_line:
         stock_status = '中'
-        suggested_action = '建议补货'
+        suggested_action = '建议补库'
     else:
         stock_status = '高'
-        suggested_action = '正常，无需补货'
+        suggested_action = '正常'
     
     # 计算建议补货数量
     recommended_qty = max(0, replenish_line - available_stock)
@@ -814,16 +814,16 @@ def analyze_inventory(inventory_data):
         # 判断库存状态
         if available_stock <= emergency_line:
             stock_status = '紧急'
-            suggested_action = '立即紧急补货'
+            suggested_action = '建议补库'
         elif available_stock <= replenish_line:
             stock_status = '低'
-            suggested_action = '立即补货'
+            suggested_action = '建议补库'
         elif available_stock <= high_line:
             stock_status = '中'
-            suggested_action = '建议补货'
+            suggested_action = '立即补库'
         else:
             stock_status = '高'
-            suggested_action = '正常，无需补货'
+            suggested_action = '正常'
         
         recommended_qty = max(0, replenish_line - available_stock)
         

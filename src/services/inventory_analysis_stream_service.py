@@ -496,7 +496,15 @@ class InventoryAnalysisStreamService:
                         else:
                             stock_status = '高'
                     
-                    suggested_action = result_data.get('suggestedAction', '') or ('补货' if current_stock <= replenish_line else '正常')
+                    result_suggested = result_data.get('suggestedAction', '')
+                    if result_suggested:
+                        suggested_action = result_suggested
+                    elif current_stock <= replenish_line:
+                        suggested_action = '立即补库'
+                    elif current_stock <= high_level:
+                        suggested_action = '建议补库'
+                    else:
+                        suggested_action = '正常'
                     
                     # 字段获取逻辑（与非流式保持一致）
                     warehouse_code = combo_data.get('warehouseCode') or combo_data.get('warehouse_code', '')
@@ -846,10 +854,10 @@ class InventoryAnalysisStreamService:
 - **高位线**：仓库库存已处于高点，完全不用再补库，可以考虑利库
 
 ### 水位判断标准：
-- **紧急状态**: 实际可用库存 <= 应急线 → **立即紧急补货**
-- **低水位**: 实际可用库存 > 应急线 且 <= 补库线 → **立即补库**
-- **中水位**: 实际可用库存 > 补库线 且 <= 高位线 → **建议补库**
-- **高水位**: 实际可用库存 > 高位线 → **正常**，无需补库，可考虑利库
+- **紧急状态**: 实际可用库存 <= 应急线 → **建议补库**
+- **低水位**: 实际可用库存 > 应急线 且 <= 补库线 → **建议补库**
+- **中水位**: 实际可用库存 > 补库线 且 <= 高位线 → **立即补库**
+- **高水位**: 实际可用库存 > 高位线 → **正常**
 
 ## 输出格式要求
 
@@ -988,10 +996,10 @@ class InventoryAnalysisStreamService:
 - **高位线**：仓库库存已处于高点，完全不用再补库，可以考虑利库
 
 ### 水位判断标准：
-- **紧急状态**: 实际可用库存 <= 应急线 → **立即紧急补货**
-- **低水位**: 实际可用库存 > 应急线 且 <= 补库线 → **立即补库**
-- **中水位**: 实际可用库存 > 补库线 且 <= 高位线 → **建议补库**
-- **高水位**: 实际可用库存 > 高位线 → **正常**，无需补库，可考虑利库
+- **紧急状态**: 实际可用库存 <= 应急线 → **建议补库**
+- **低水位**: 实际可用库存 > 应急线 且 <= 补库线 → **建议补库**
+- **中水位**: 实际可用库存 > 补库线 且 <= 高位线 → **立即补库**
+- **高水位**: 实际可用库存 > 高位线 → **正常**
 
 ## 分析要求
 

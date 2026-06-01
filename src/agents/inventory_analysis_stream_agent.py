@@ -239,6 +239,7 @@ STREAM_INVENTORY_ANALYSIS_BATCH_PROMPT = """你是一位资深的电力物料智
       "highLine": [高位线],
       "waterLevelStatus": "emergency|low|medium|high",
       "waterLevelStatusName": "紧急|低|中|高",
+      "suggestedAction": "立即补库|建议补库|正常",
       "suggestedQty": [建议补货数量],
       "riskLevel": "low|medium|high"
     }}
