@@ -261,7 +261,10 @@ class InventoryAnalysisStreamService:
             yield "      • 库存查询：查询当前库存和在途库存\n"
             yield "      • 出库查询：查询历史出库数据（用于预测）\n"
             yield "      • 统计计算：计算最高、最低、平均、中位数等指标\n"
-            yield "   └─ 正在执行数据预处理...\n"
+            yield "   └─ 正在批量提取数据...\n"
+
+            batch_stock = await self._batch_get_current_stock(all_combinations)
+            batch_outbound = await self._batch_get_outbound_data(all_combinations)
 
             for idx, combo in enumerate(all_combinations, 1):
                 # 每处理一个组合前检查会话是否已取消
@@ -279,17 +282,13 @@ class InventoryAnalysisStreamService:
                 warehouse_name = warehouse_info.get(warehouse_code, {}).get('name', '')
                 inventory_level = warehouse_info.get(warehouse_code, {}).get('level', '')
 
-                current_stock_data = await self._get_current_stock(warehouse_code, material_code, tech_id)
-                current_stock = 0
-                in_transit_stock = 0
-                material_desc = ''
-                if current_stock_data and len(current_stock_data) > 0:
-                    current_stock = float(current_stock_data[0].get('current_stock', 0) or 0)
-                    in_transit_stock = float(current_stock_data[0].get('in_transit_stock', 0) or 0)
-                    material_desc = current_stock_data[0].get('material_desc', '') or ''
+                key = (warehouse_code, str(material_code), tech_id)
+                stock_data = batch_stock.get(key, {})
+                current_stock = float(stock_data.get('current_stock', 0) or 0)
+                in_transit_stock = float(stock_data.get('in_transit_stock', 0) or 0)
+                material_desc = stock_data.get('material_desc', '')
 
-                # 查询历史出库数据（用于预测，不使用用户传入的日期范围）
-                outbound_data = await self._get_outbound_data(warehouse_code, material_code, tech_id, None, None)
+                outbound_data = batch_outbound.get(key, [])
                 stats = self._calculate_outbound_stats(outbound_data, None, None)
 
                 combo_data = {
@@ -1288,3 +1287,125 @@ class InventoryAnalysisStreamService:
                 conn.close()
 
         return outbound_data
+
+    async def _batch_get_current_stock(self, all_combinations: List[Dict]) -> Dict[tuple, Dict]:
+        """批量获取所有组合的当前库存数据
+
+        Args:
+            all_combinations: 组合列表，每个元素包含 warehouse_code, material_code, tech_id
+
+        Returns:
+            dict: key=(warehouse_code, material_code, tech_id), value=库存数据dict
+        """
+        warehouse_codes = set()
+        combo_keys = set()
+        for combo in all_combinations:
+            w = combo['warehouse_code']
+            m = combo['material_code']
+            t = combo['tech_id']
+            if t:
+                warehouse_codes.add(w)
+                combo_keys.add((w, str(m), t))
+
+        if not warehouse_codes:
+            return {}
+
+        result = {}
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            placeholders = ','.join(['%s'] * len(warehouse_codes))
+            query = f'''
+                SELECT
+                    w.loc_code as warehouse_code,
+                    w.material_code,
+                    w.tech_id,
+                    MAX(w.material_desc) as material_desc,
+                    SUM(CASE WHEN w.source_type IS NULL OR w.source_type != '在途' THEN w.stock_qty ELSE 0 END) as current_stock,
+                    SUM(CASE WHEN w.source_type = '在途' THEN w.stock_qty ELSE 0 END) as in_transit_stock
+                FROM w_stock_info_0808 w
+                WHERE w.loc_code IN ({placeholders})
+                GROUP BY w.loc_code, w.material_code, w.tech_id
+            '''
+            cur.execute(query, list(warehouse_codes))
+            rows = cur.fetchall()
+
+            for row in rows:
+                key = (row['warehouse_code'], str(row['material_code']), row['tech_id'])
+                if key in combo_keys:
+                    result[key] = {
+                        'warehouse_code': row['warehouse_code'],
+                        'material_code': str(row['material_code']),
+                        'material_desc': row['material_desc'] or '',
+                        'tech_id': row['tech_id'],
+                        'current_stock': float(row['current_stock'] or 0),
+                        'in_transit_stock': float(row['in_transit_stock'] or 0),
+                    }
+
+            logger.info(f"[InventoryAnalysisStream] 批量获取库存数据成功: 查询到 {len(rows)} 行, 匹配 {len(result)} 个组合")
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 批量获取库存数据失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return result
+
+    async def _batch_get_outbound_data(self, all_combinations: List[Dict]) -> Dict[tuple, List[Dict]]:
+        """批量获取所有组合的历史出库数据
+
+        Args:
+            all_combinations: 组合列表
+
+        Returns:
+            dict: key=(warehouse_code, material_code, tech_id), value=出库数据列表
+        """
+        warehouse_codes = set()
+        combo_keys = set()
+        for combo in all_combinations:
+            w = combo['warehouse_code']
+            m = combo['material_code']
+            t = combo['tech_id']
+            if t:
+                warehouse_codes.add(w)
+                combo_keys.add((w, str(m), t))
+
+        if not warehouse_codes:
+            return {}
+
+        result = {key: [] for key in combo_keys}
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            placeholders = ','.join(['%s'] * len(warehouse_codes))
+            query = f'''
+                SELECT fd_warehouse_code, fd_material_code, fd_tech_id,
+                       fd_posting_month, fd_outbound_qty, fd_outbound_count
+                FROM mt_historical_outbound
+                WHERE fd_warehouse_code IN ({placeholders})
+                ORDER BY fd_warehouse_code, fd_material_code, fd_tech_id, fd_posting_month DESC
+            '''
+            cur.execute(query, list(warehouse_codes))
+            rows = cur.fetchall()
+
+            for row in rows:
+                key = (row['fd_warehouse_code'], str(row['fd_material_code']), row['fd_tech_id'])
+                if key in combo_keys:
+                    result[key].append({
+                        "posting_month": row['fd_posting_month'],
+                        "outbound_qty": row['fd_outbound_qty'] or 0,
+                        "outbound_count": row['fd_outbound_count'] or 0
+                    })
+
+            logger.info(f"[InventoryAnalysisStream] 批量获取出库数据成功: 查询到 {len(rows)} 行, 覆盖 {sum(1 for v in result.values() if v)} 个组合")
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 批量获取出库数据失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return result
