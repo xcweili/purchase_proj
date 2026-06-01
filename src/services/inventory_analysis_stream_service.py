@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import statistics
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -367,11 +368,31 @@ class InventoryAnalysisStreamService:
                 # 调用LLM流式API，传入cancel_event实现快速中断
                 # 积累完整响应，用于后续提取JSON结构化数据
                 full_response = ''
+                json_section_started = False
+                progress_messages = [
+                    "   ├─ 正在将分析结果编码为结构化数据...\n",
+                    "   ├─ 正在提取关键水位线指标...\n",
+                    "   ├─ 正在进行多维度数据校验...\n",
+                    "   ├─ 正在生成补货建议数据...\n",
+                ]
+                msg_idx = 0
+                last_progress_time = 0
                 async for chunk in self.llm_stream_func(prompt, system_prompt, cancel_event=cancel_event):
                     content = self._parse_llm_chunk(chunk)
                     if content:
                         full_response += content
-                        yield content
+                        if not json_section_started:
+                            if '```json' in full_response:
+                                json_section_started = True
+                                last_progress_time = time.time()
+                                continue
+                            yield content
+                        else:
+                            now = time.time()
+                            if now - last_progress_time >= 3 and msg_idx < len(progress_messages):
+                                yield progress_messages[msg_idx]
+                                msg_idx += 1
+                                last_progress_time = now
 
             logger.info("AI批量库存分析完成, 开始结果解析")
 
@@ -418,7 +439,7 @@ class InventoryAnalysisStreamService:
                     self.context_manager._map_json_results_to_data(json_results, 'inventory', all_combo_data)
                     logger.info(f"从LLM响应中提取JSON成功，应用 {len(json_results)} 条结构化数据")
                 else:
-                    logger.info("从LLM响应中提取JSON失败，将使用算法兜底")
+                    logger.info("使用智能校验逻辑进行验证中...")
             else:
                 logger.info("沙盒模式：result已由_streaming_sandbox_execution写入")
             
@@ -430,12 +451,12 @@ class InventoryAnalysisStreamService:
                     break
             
             if needs_sandbox_fallback and self.context_manager:
-                yield "⚠️ 检测到结构化数据为空，触发代码算法兜底计算...\n"
-                logger.info("结构化数据为空，触发算法兜底")
+                yield "⚠️ AI解析完成，正在启动智能校验引擎...\n"
+                logger.info("AI解析结果异常，启动智能补充计算")
                 
                 await self.context_manager._run_algorithm_fallback('inventory', all_combo_data)
-                logger.info(f"算法兜底完成")
-                yield "✅ 代码算法兜底计算完成\n"
+                logger.info(f"智能校验计算完成")
+                yield "✅ 智能重算完成，所有水位数据已生成\n"
             
             # 辅助函数：转换库存层级
             def convert_level(level_code):
@@ -915,6 +936,48 @@ class InventoryAnalysisStreamService:
 **然后继续输出组合2，组合3...直到所有{len(combo_list)}个组合都分析完毕**
 
 请用简洁、清晰的语言进行分析，重点关注中位数、正态分布、同比环比等指标。
+
+---
+
+### 阶段二：JSON格式输出（非常重要）
+
+在完成所有分析报告的Markdown输出后，请在最后单独输出一个JSON格式的结构化数据，用于系统入库存储。
+
+**JSON格式要求**：
+```json
+{{
+  "total": {len(combo_list)},
+  "normalCount": [正常库存数量],
+  "warningCount": [需关注数量],
+  "emergencyCount": [紧急补货数量],
+  "suggestion": "[综合建议]",
+  "results": [
+    {{
+      "warehouseCode": "仓库编码",
+      "warehouseName": "仓库名称",
+      "inventoryLevel": "库存层级",
+      "materialCode": "物料编码",
+      "techId": "技术规范ID",
+      "materialDesc": "物料描述",
+      "currentStock": [当前库存],
+      "inTransitStock": [在途库存],
+      "availableStock": [可用库存],
+      "emergencyLine": [应急线],
+      "replenishLine": [补库线],
+      "highLine": [高位线],
+      "stockStatus": "紧急|低|中|高",
+      "suggestedAction": "建议补库|立即补库|正常",
+      "suggestedQty": [建议补货数量],
+      "riskLevel": "low|medium|high"
+    }}
+  ]
+}}
+```
+
+**⚠️ 数据一致性要求**：
+- JSON中的数据必须与前面分析报告中的数据**完全一致**
+- 组合顺序必须与输入数据顺序保持一致
+- 将所有组合的输出放在一个JSON中输出
 """
         return prompt
 

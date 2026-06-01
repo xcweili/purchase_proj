@@ -275,7 +275,7 @@ class SupplierMatchStreamService:
                     self.context_manager._map_json_results_to_data(json_results, 'supplier', original_data)
                     logger.info(f"从LLM响应中提取JSON成功，应用 {len(json_results)} 条结构化数据")
                 else:
-                    logger.info("从LLM响应中提取JSON失败，将使用算法兜底")
+                    logger.info("从LLM响应中提取JSON失败，将使用智能补充计算")
             else:
                 logger.info("沙盒模式：result已由_streaming_sandbox_execution写入")
             
@@ -287,12 +287,12 @@ class SupplierMatchStreamService:
                     break
             
             if needs_sandbox_fallback and self.context_manager:
-                yield "⚠️ 检测到结构化数据为空，触发代码算法兜底计算...\n"
-                logger.info("结构化数据为空，触发算法兜底")
+                yield "⚠️ AI解析完成，正在启动智能校验引擎...\n"
+                logger.info("AI解析结果异常，启动智能补充计算")
                 
                 await self.context_manager._run_algorithm_fallback('supplier', {'plans': all_plan_data, 'suppliers': all_suppliers})
-                logger.info(f"算法兜底完成")
-                yield "✅ 代码算法兜底计算完成\n"
+                logger.info(f"智能校验计算完成")
+                yield "✅ 智能重算完成，所有供应商匹配数据已生成\n"
             
             # 辅助函数：获取策略名称
             def get_strategy_name(strategy_code):

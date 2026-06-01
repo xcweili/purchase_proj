@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """上下文管理器 - 处理超长prompt的代码沙盒执行"""
 import json
+import re
 import logging
 from typing import Dict, Any, List, Optional
 from .code_sandbox import (
@@ -12,6 +13,7 @@ from .code_sandbox import (
     analyze_allocation,
     match_suppliers
 )
+from .json_repair import JSONRepair
 
 logger = logging.getLogger(__name__)
 
@@ -373,32 +375,58 @@ class ContextManager:
 
     def _extract_json_from_response(self, full_response: str) -> Optional[List[Dict]]:
         """从LLM的完整Markdown响应中提取JSON结构化数据"""
-        import re
+        if not full_response:
+            return None
+        
         patterns = [
-            r'```json\s*\n(.+?)\n\s*```',
-            r'```\s*\n(.+?)\n\s*```',
+            r'```json\s*\n([\s\S]*?)```',
+            r'```\s*\n([\s\S]*?)```',
         ]
         for pattern in patterns:
-            match = re.search(pattern, full_response, re.DOTALL)
-            if match:
+            matches = re.finditer(pattern, full_response)
+            for match in matches:
+                content = match.group(1).strip()
                 try:
-                    data = json.loads(match.group(1))
-                    results = data.get('results', [])
-                    if results:
-                        return results
+                    data = json.loads(content)
                 except Exception:
-                    continue
-        start = full_response.rfind('{')
-        end = full_response.rfind('}')
-        if start != -1 and end != -1 and start < end:
-            try:
-                data = json.loads(full_response[start:end+1])
-                results = data.get('results', [])
-                if results:
-                    return results
-            except Exception:
-                pass
-        return None
+                    data = JSONRepair.repair_json(content)
+                if data:
+                    if isinstance(data, dict):
+                        results = data.get('results', [])
+                        if results:
+                            return results
+                    elif isinstance(data, list):
+                        return data
+        
+        all_results = []
+        start = 0
+        while True:
+            brace_start = full_response.find('{', start)
+            if brace_start == -1:
+                break
+            depth = 0
+            pos = brace_start
+            while pos < len(full_response):
+                if full_response[pos] == '{':
+                    depth += 1
+                elif full_response[pos] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        content = full_response[brace_start:pos + 1]
+                        try:
+                            data = json.loads(content)
+                        except Exception:
+                            data = JSONRepair.repair_json(content)
+                        if isinstance(data, dict):
+                            results = data.get('results', [])
+                            if results:
+                                return results
+                            all_results.extend(data.values() if any(isinstance(v, list) and len(v) > 0 for v in data.values()) else [])
+                        break
+                pos += 1
+            start = brace_start + 1
+        
+        return all_results if all_results else None
 
     def _map_json_results_to_data(self, results: List[Dict], data_type: str, original_data) -> bool:
         """将LLM返回的JSON结果映射到原始数据"""
