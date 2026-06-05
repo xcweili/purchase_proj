@@ -14,19 +14,33 @@ DB_TYPE_MYSQL = 'mysql'
 # 当前使用的数据库类型
 CURRENT_DB_TYPE = DB_TYPE_MYSQL
 
-# MySQL配置
+# MySQL配置(js)
 MYSQL_CONFIG: Dict[str, any] = {
-    'host': '25.212.252.199',
+    'host': 'rm-j6j2fm5qw676ku2n.mysql.rds.ops.sgcc.sgcc.com.cn',
     'port': 13306,
-    'user': 'wztppt230',
-    'password': 'HNxt@2025',
-    'database': 'ai_project',
+    'user': 'pewz_user',
+    'password': 'pewz$$12RRS',
+    'database': 'pewz',
     'charset': 'utf8mb4',
     'cursorclass': 'DictCursor',
     'connect_timeout': 5,
     'read_timeout': 5,
     'write_timeout': 5
 }
+
+# MySQL配置(hn)
+# MYSQL_CONFIG: Dict[str, any] = {
+#     'host': '25.212.252.199',
+#     'port': 13306,
+#     'user': 'wztppt230',
+#     'password': 'HNxt@2025',
+#     'database': 'ai_project',
+#     'charset': 'utf8mb4',
+#     'cursorclass': 'DictCursor',
+#     'connect_timeout': 5,
+#     'read_timeout': 5,
+#     'write_timeout': 5
+# }
 
 # MySQL配置 (待启用 - 备用配置)
 # MYSQL_CONFIG = {
