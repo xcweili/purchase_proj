@@ -16,7 +16,7 @@ CURRENT_DB_TYPE = DB_TYPE_MYSQL
 
 # MySQL配置(js)
 MYSQL_CONFIG: Dict[str, any] = {
-    'host': 'rm-j6j2fm5qw676ku2n.mysql.rds.ops.sgcc.sgcc.com.cn',
+    'host': 'rm-j6j2fm50qw676ku2n.mysql.rds.ops.sgmc.sgcc.com.cn',
     'port': 13306,
     'user': 'pewz_user',
     'password': 'pewz$$12RRS',
