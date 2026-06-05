@@ -432,15 +432,20 @@ class ContextManager:
         return all_results if all_results else None
 
     def _map_json_results_to_data(self, results: List[Dict], data_type: str, original_data) -> bool:
-        """将LLM返回的JSON结果映射到原始数据"""
+        """将LLM返回的JSON结果映射到原始数据
+        
+        注意：不做任何水位线值的兜底修正。
+        水位线的差异性和合理性由 prompt 层面保证，LLM 应根据数据特征动态计算。
+        如果 LLM 返回了相等或不合理的水位线，说明 prompt 需要优化，而非在代码中硬修正。
+        """
         try:
             if data_type == 'inventory' and isinstance(original_data, list):
                 for i, item in enumerate(results):
                     if i < len(original_data):
                         original_data[i]['result'] = {
-                            'emergencyLine': item.get('emergencyLine', item.get('emergency_line', 0)),
-                            'replenishLevel': item.get('replenishLine', item.get('replenish_line', 0)),
-                            'highLevel': item.get('highLine', item.get('high_line', 0)),
+                            'emergencyLine': float(item.get('emergencyLine', item.get('emergency_line', 0))),
+                            'replenishLevel': float(item.get('replenishLine', item.get('replenish_line', 0))),
+                            'highLevel': float(item.get('highLine', item.get('high_line', 0))),
                             'currentStock': item.get('currentStock', item.get('current_stock', 0)),
                             'inTransitQty': item.get('inTransitStock', item.get('in_transit_stock', 0)),
                             'stockStatus': item.get('stockStatus', item.get('waterLevelStatusName', item.get('stock_status', ''))),

@@ -837,6 +837,7 @@ class RealDB:
                 (material_code, material_name, tech_id, warehouse_code, warehouse_name,
                  emergency_factor, replenish_factor, high_factor,
                  replenish_trigger_value, emergency_line, mid_line, high_line,
+                 reserve_quota, big_class_desc, middle_class_desc, subclass_desc,
                  month, create_time)
         
         Returns:
@@ -854,8 +855,9 @@ class RealDB:
                         fd_material_code, fd_material_name, fd_tech_id, fd_warehouse_code, fd_warehouse_name,
                         fd_low_water_coefficient, fd_mid_water_coefficient, fd_high_water_coefficient,
                         fd_replenish_trigger_value, fd_low_water_value, fd_mid_water_value, fd_high_water_value,
-                        fd_reserve_quota, fd_month, fd_create_time
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        fd_reserve_quota, big_class_desc, middle_class_desc, subclass_desc,
+                        fd_month, fd_create_time
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', records)
                 
                 conn.commit()

@@ -207,13 +207,12 @@ def calculate_water_levels(outbound_data: List[dict]) -> dict:
     cv_factor = 0.6 + min(cv, 2.0) * 0.7
     
     # 应急线：覆盖约1个月的最基本安全库存
-    # 基准 × CV因子 × 趋势因子
-    emergency_line = base_value * cv_factor * trend_factor
+    emergency_line = base_value * cv_factor
     
     # 补库线：覆盖1.5-2.5个月，给补库操作留足时间
     # 在应急线基础上增加缓冲，波动大的给更多缓冲
     supply_buffer = 1.0 + cv * 0.8  # 1.0~2.6
-    replenish_line = emergency_line * (1.0 + supply_buffer) * trend_factor
+    replenish_line = emergency_line * (1.0 + supply_buffer)
     
     # 高位线：覆盖2.5-4个月，应对峰值需求
     # 应能覆盖历史最高出库的大部分情况，但不过度
@@ -223,11 +222,27 @@ def calculate_water_levels(outbound_data: List[dict]) -> dict:
     high_line_from_factor = replenish_line * (2.0 + cv * 1.5)  # 2.0~5.0倍补库线
     high_line = max(high_line_from_data, high_line_from_factor)
     
-    # 确保梯度合理：应急线 < 补库线 < 高位线
-    if replenish_line <= emergency_line:
-        replenish_line = emergency_line * 1.5
-    if high_line <= replenish_line:
-        high_line = replenish_line * 1.8
+    # 应用趋势因子（只在最后统一应用，避免重复压缩梯度）
+    emergency_line *= trend_factor
+    replenish_line *= trend_factor
+    high_line *= trend_factor
+    
+    # ========== 严格兜底限制：确保水位线梯度合理 ==========
+    # 1. 确保应急线和补库线有最小差距（至少50%）
+    min_replenish_ratio = 1.5  # 补库线至少是应急线的1.5倍
+    if replenish_line < emergency_line * min_replenish_ratio:
+        replenish_line = emergency_line * min_replenish_ratio
+    
+    # 2. 确保高位线和补库线有最小差距（至少80%）
+    min_high_ratio = 1.8  # 高位线至少是补库线的1.8倍
+    if high_line < replenish_line * min_high_ratio:
+        high_line = replenish_line * min_high_ratio
+    
+    # 3. 避免极端接近的情况（考虑四舍五入后相等）
+    if abs(replenish_line - emergency_line) < 0.01:
+        replenish_line = emergency_line + 0.01
+    if abs(high_line - replenish_line) < 0.01:
+        high_line = replenish_line + 0.01
     
     # 判断季节性(基于CV)
     if cv < 0.2:

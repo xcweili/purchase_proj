@@ -651,7 +651,7 @@ class SupplierMatchStreamService:
 
 ---
 
-### 阶段二：JSON格式输出（非常重要）
+### 阶段二：数据解析入库（非常重要）
 
 在完成所有分析报告的Markdown输出后，请在最后单独输出一个JSON格式的结构化数据，用于系统入库存储。
 

@@ -300,7 +300,8 @@ class InventoryAnalysisStreamService:
                 stock_data = batch_stock.get(key, {})
                 current_stock = float(stock_data.get('current_stock', 0) or 0)
                 in_transit_stock = float(stock_data.get('in_transit_stock', 0) or 0)
-                material_desc = stock_data.get('material_desc', '')
+                # 水位线模式：从 mt_historical_outbound 获取物料描述；补库模式：从 stock 表获取
+                material_desc = stock_data.get('material_desc', '') or combo.get('material_name', '')
 
                 outbound_data = batch_outbound.get(key, [])
                 stats = self._calculate_outbound_stats(outbound_data, None, None)
@@ -469,6 +470,11 @@ class InventoryAnalysisStreamService:
                 yield "✅ 智能重算完成，所有水位数据已生成\n"
             
             # ============ 水位线模式：仅写入 mt_water_level_config ============
+            # 批量获取物料分类信息（big_class_desc / middle_class_desc / subclass_desc）
+            material_class_map = await asyncio.to_thread(
+                self._batch_get_material_classification_sync, all_combo_data
+            )
+
             water_level_config_data = []
             for combo_data in all_combo_data:
                 result_data = combo_data.get('result', {})
@@ -513,6 +519,13 @@ class InventoryAnalysisStreamService:
                 emergency_line = float(combo_data.get('emergency_line', 0) or 0)
                 replenish_line = float(combo_data.get('replenish_line', 0) or 0)
                 high_line = float(combo_data.get('high_line', 0) or 0)
+
+                # 获取物料分类描述
+                class_key = f"{str(material_code)}_{tech_id}"
+                class_info = material_class_map.get(class_key, {})
+                big_class_desc = class_info.get('big_class_desc', '')
+                middle_class_desc = class_info.get('middle_class_desc', '')
+                subclass_desc = class_info.get('subclass_desc', '')
                 
                 if material_code and tech_id:
                     water_level_config_data.append((
@@ -529,6 +542,9 @@ class InventoryAnalysisStreamService:
                         replenish_line,
                         high_line,
                         replenish_line,  # fd_reserve_quota 库存定额
+                        big_class_desc,
+                        middle_class_desc,
+                        subclass_desc,
                         datetime.now().strftime('%Y%m'),
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     ))
@@ -793,7 +809,7 @@ class InventoryAnalysisStreamService:
             yield f"✅ 数据入库完成，成功保存 {saved} 条记录\n\n"
             
             # ========== 阶段七：LLM总结 ==========
-            yield "🤖 【阶段七：AI智能总结】\n"
+            yield "🤖 【阶段七：智能总结】\n"
             yield "   📌 当前需求：基于分析汇总数据，生成智能总结报告\n"
             yield "   └─ 正在生成总结...\n"
             yield "────────────────────────────────────────\n"
@@ -1102,11 +1118,23 @@ class InventoryAnalysisStreamService:
 
 **供货周期参考**：默认15-45天（0.5-1.5个月），根据库存层级调整。
 
-**第四步：合理性校验**
-- 应急线 ≤ 补库线 ≤ 高位线（必须满足）
-- 应急线应接近但不低于历史最低月出库
-- 高位线应能覆盖历史最高月出库的大部分情况
-- 三个水位线应该在数据特征上呈合理梯度
+**第四步：合理性校验（关键！）**
+
+**⚠️ 最重要规则：三个水位线数值必须不同，且保持合理梯度**
+
+这是水位线分析的基本要求。如果一个物料消耗稳定且无明显波动，三个线之间可以接近但必须有明确差距；如果波动大，差距应更加显著。以下为强制要求：
+
+1. **应急线 < 补库线 < 高位线**（必须严格满足，不可相等）
+2. 补库线应至少比应急线高出 40%-200%（根据数据波动而定，波动越大差距越大）
+3. 高位线应至少比补库线高出 50%-300%（根据峰值覆盖需求而定）
+4. 应急线应接近但不低于历史最低月出库
+5. 高位线应能覆盖历史最高月出库的大部分情况
+
+**禁止事项**：
+- ❌ 不要对所有组合使用相同的系数（如都乘以0.5、1.0、2.0）
+- ❌ 不要让三个线相等（如应急线=补库线=高位线=100）
+- ❌ 不要套用固定公式而不看数据特征
+- ✅ 每个组合根据自身的CV、趋势、基准值独立推导"
 
 ### 水位线定义：
 - **应急线**：最低安全库存，低于此线必须走应急补库流程
@@ -1152,7 +1180,7 @@ class InventoryAnalysisStreamService:
 
 ---
 
-### JSON格式输出（非常重要）
+### 数据解析入库（非常重要）
 
 在完成所有Markdown分析报告后，请在最后输出一个完整的JSON结构化数据：
 
@@ -1181,6 +1209,7 @@ class InventoryAnalysisStreamService:
 - JSON中的水位线数值必须与Markdown分析报告中的数值**完全一致**
 - 组合顺序必须与输入数据顺序保持一致
 - 所有组合放在一个JSON中输出
+- **每个组合的 emergencyLine < replenishLine < highLine 必须严格成立，且差距应反映该组合的数据特征**
 """
         return prompt
 
@@ -1423,7 +1452,8 @@ class InventoryAnalysisStreamService:
 
             # 不使用日期范围过滤历史数据，因为我们需要所有历史数据来预测未来
             query = '''
-                SELECT DISTINCT fd_warehouse_code, fd_material_code, fd_tech_id
+                SELECT fd_warehouse_code, fd_material_code, fd_tech_id,
+                       MAX(fd_material_name) as fd_material_name
                 FROM mt_historical_outbound
                 WHERE 1=1
             '''
@@ -1439,6 +1469,8 @@ class InventoryAnalysisStreamService:
                 query += f" AND fd_material_code IN ({placeholders})"
                 params.extend(material_codes)
 
+            query += " GROUP BY fd_warehouse_code, fd_material_code, fd_tech_id"
+
             cur.execute(query, params)
             rows = cur.fetchall()
 
@@ -1446,7 +1478,8 @@ class InventoryAnalysisStreamService:
                 combinations.append({
                     'warehouse_code': row['fd_warehouse_code'],
                     'material_code': str(row['fd_material_code']),
-                    'tech_id': row['fd_tech_id']
+                    'tech_id': row['fd_tech_id'],
+                    'material_name': row['fd_material_name'] or ''
                 })
 
         except Exception as e:
@@ -1559,6 +1592,66 @@ class InventoryAnalysisStreamService:
                 conn.close()
 
         return outbound_data
+
+    def _batch_get_material_classification_sync(self, all_combinations: List[Dict]) -> Dict[str, Dict]:
+        """从 mt_deposit_materials 批量查询物料分类描述
+
+        水门线模式需要 big_class_desc / middle_class_desc / subclass_desc，
+        从 mt_deposit_materials 按 (material_code, tech_id) 匹配。
+
+        key = f"{material_code}_{tech_id}"
+        """
+        result = {}
+        if not all_combinations:
+            return result
+
+        code_tech_pairs = set()
+        for combo in all_combinations:
+            mc = combo.get('material_code', '')
+            ti = combo.get('tech_id', '')
+            if mc and ti:
+                code_tech_pairs.add((str(mc), ti))
+
+        if not code_tech_pairs:
+            return result
+
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+
+            # 精确 pair 匹配：(material_code, tech_id) 一一对应
+            # 利用复合索引 uk_material_spec(fd_material_code, fd_tech_spec_id)
+            pairs = [(str(p[0]), p[1]) for p in code_tech_pairs]
+            pair_placeholders = ','.join(['(%s, %s)'] * len(pairs))
+            # 展平为参数列表：[code1, tech1, code2, tech2, ...]
+            flat_params = [v for pair in pairs for v in pair]
+
+            query = f'''
+                SELECT DISTINCT fd_material_code, fd_tech_spec_id,
+                       fd_big_class_desc, fd_middle_class_desc, fd_subclass_desc
+                FROM mt_deposit_materials
+                WHERE (fd_material_code, fd_tech_spec_id) IN ({pair_placeholders})
+            '''
+            cur.execute(query, flat_params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                key = f"{str(row['fd_material_code'])}_{row['fd_tech_spec_id']}"
+                result[key] = {
+                    'big_class_desc': row.get('fd_big_class_desc', '') or '',
+                    'middle_class_desc': row.get('fd_middle_class_desc', '') or '',
+                    'subclass_desc': row.get('fd_subclass_desc', '') or ''
+                }
+
+            logger.info(f"[InventoryAnalysisStream] 批量获取物料分类: {len(rows)} 条")
+        except Exception as e:
+            logger.error(f"[InventoryAnalysisStream] 批量获取物料分类失败: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return result
 
     def _batch_get_current_stock_sync(self, all_combinations: List[Dict]) -> Dict[tuple, Dict]:
         """批量获取所有组合的当前库存数据
