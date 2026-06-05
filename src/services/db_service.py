@@ -604,5 +604,266 @@ class RealDB:
             logger.error(f"[DB] fetch_plan_details 执行失败: {str(e)}")
             return []
 
+    async def fetch_deposit_materials_by_category(self, major_category: str = '', medium_category: str = '', small_category: str = '') -> List[Dict]:
+        """根据物资分类编码查询储备物资列表（mt_deposit_materials）
+        
+        Args:
+            major_category: 物资大类编码，如 "01"
+            medium_category: 物资中类编码，如 "0101"
+            small_category: 物资小类编码，如 "010101"
+        
+        Returns:
+            物资列表，包含 fd_material_code, fd_material_desc, fd_tech_spec_id 等
+        """
+        logger.info(f"[fetch_deposit_materials_by_category] major={major_category}, medium={medium_category}, small={small_category}")
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                query = '''
+                    SELECT DISTINCT fd_material_code, fd_material_desc, fd_tech_spec_id, fd_identifier,
+                           fd_big_class_code, fd_big_class_desc, fd_middle_class_code, fd_middle_class_desc,
+                           fd_subclass_code, fd_subclass_desc
+                    FROM mt_deposit_materials
+                    WHERE 1=1
+                '''
+                params = []
+                
+                if major_category:
+                    query += " AND fd_big_class_code = %s"
+                    params.append(major_category)
+                if medium_category:
+                    query += " AND fd_middle_class_code = %s"
+                    params.append(medium_category)
+                if small_category:
+                    query += " AND fd_subclass_code = %s"
+                    params.append(small_category)
+                
+                cur.execute(query, params)
+                results = cur.fetchall()
+                logger.info(f"[fetch_deposit_materials_by_category] 查询到 {len(results)} 条物资记录")
+                return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"[DB] fetch_deposit_materials_by_category 执行失败: {str(e)}")
+            return []
+
+    async def fetch_water_level_configs_batch(self, material_codes: List[str], tech_ids: List[str]) -> List[Dict]:
+        """批量查询水位配置（mt_water_level_config）
+        
+        Args:
+            material_codes: 物料编码列表
+            tech_ids: 技术规范ID列表
+        
+        Returns:
+            水位配置列表，包含各仓库下的水位系数和触发值
+        """
+        if not material_codes or not tech_ids:
+            return []
+        
+        logger.info(f"[fetch_water_level_configs_batch] materials={len(material_codes)}, techs={len(tech_ids)}")
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                material_placeholders = ','.join(['%s'] * len(material_codes))
+                tech_placeholders = ','.join(['%s'] * len(tech_ids))
+                
+                query = f'''
+                    SELECT fd_warehouse_code, fd_warehouse_name, fd_material_code, fd_material_name,
+                           fd_tech_id, fd_low_water_coefficient, fd_mid_water_coefficient, 
+                           fd_high_water_coefficient, fd_replenish_trigger_value,
+                           fd_low_water_value, fd_mid_water_value, fd_high_water_value
+                    FROM mt_water_level_config
+                    WHERE fd_material_code IN ({material_placeholders})
+                      AND fd_tech_id IN ({tech_placeholders})
+                '''
+                params = list(material_codes) + list(tech_ids)
+                
+                cur.execute(query, params)
+                results = cur.fetchall()
+                logger.info(f"[fetch_water_level_configs_batch] 查询到 {len(results)} 条水位配置")
+                return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"[DB] fetch_water_level_configs_batch 执行失败: {str(e)}")
+            return []
+
+    async def batch_get_stock_for_combos(self, combos: List[tuple]) -> Dict[tuple, Dict]:
+        """批量查询指定组合的当前库存和在途库存
+        
+        Args:
+            combos: (warehouse_code, material_code, tech_id) 列表
+        
+        Returns:
+            dict: key=(warehouse_code, material_code, tech_id), value={'current_stock', 'in_transit_stock', 'warehouse_name'}
+        """
+        if not combos:
+            return {}
+        
+        logger.info(f"[batch_get_stock_for_combos] 查询 {len(combos)} 个组合的库存")
+        result = {}
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                # 提取唯一的 warehouse_codes, material_codes 用于批量查询
+                unique_warehouses = list(set(c[0] for c in combos))
+                unique_materials = list(set(str(c[1]) for c in combos))
+                unique_techs = list(set(c[2] for c in combos))
+                
+                w_placeholders = ','.join(['%s'] * len(unique_warehouses))
+                m_placeholders = ','.join(['%s'] * len(unique_materials))
+                t_placeholders = ','.join(['%s'] * len(unique_techs))
+                
+                query = f'''
+                    SELECT
+                        w.loc_code as warehouse_code,
+                        w.loc_name as warehouse_name,
+                        w.material_code,
+                        w.material_desc,
+                        w.tech_id,
+                        SUM(CASE WHEN w.source_type IS NULL OR w.source_type != '在途' THEN w.stock_qty ELSE 0 END) as current_stock,
+                        SUM(CASE WHEN w.source_type = '在途' THEN w.stock_qty ELSE 0 END) as in_transit_stock
+                    FROM w_stock_info_0808 w
+                    WHERE w.loc_code IN ({w_placeholders})
+                      AND w.material_code IN ({m_placeholders})
+                      AND w.tech_id IN ({t_placeholders})
+                    GROUP BY w.loc_code, w.material_code, w.tech_id
+                '''
+                params = unique_warehouses + unique_materials + unique_techs
+                
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                
+                for row in rows:
+                    key = (row['warehouse_code'], str(row['material_code']), row['tech_id'])
+                    result[key] = {
+                        'warehouse_code': row['warehouse_code'],
+                        'warehouse_name': row['warehouse_name'] or '',
+                        'material_code': str(row['material_code']),
+                        'material_desc': row['material_desc'] or '',
+                        'tech_id': row['tech_id'],
+                        'current_stock': float(row['current_stock'] or 0),
+                        'in_transit_stock': float(row['in_transit_stock'] or 0),
+                    }
+                
+                logger.info(f"[batch_get_stock_for_combos] 查询到 {len(rows)} 行, 匹配 {len(result)} 个组合")
+        except Exception as e:
+            logger.error(f"[DB] batch_get_stock_for_combos 执行失败: {str(e)}")
+        
+        return result
+
+    async def fetch_warehouse_info_batch(self, warehouse_codes: List[str]) -> Dict[str, Dict]:
+        """批量查询仓库信息
+        
+        Args:
+            warehouse_codes: 仓库编码列表
+        
+        Returns:
+            dict: key=warehouse_code, value={'name', 'level', 'type'}
+        """
+        if not warehouse_codes:
+            return {}
+        
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                placeholders = ','.join(['%s'] * len(warehouse_codes))
+                
+                query = f'''
+                    SELECT fd_warehouse_code, fd_warehouse_name, fd_warehouse_type, fd_stock_level
+                    FROM mt_base_warehouse_info
+                    WHERE fd_warehouse_code IN ({placeholders})
+                '''
+                cur.execute(query, list(warehouse_codes))
+                rows = cur.fetchall()
+                
+                result = {}
+                for row in rows:
+                    result[row['fd_warehouse_code']] = {
+                        'name': row['fd_warehouse_name'] or '',
+                        'level': row['fd_stock_level'] or '',
+                        'type': row['fd_warehouse_type'] or ''
+                    }
+                return result
+        except Exception as e:
+            logger.error(f"[DB] fetch_warehouse_info_batch 执行失败: {str(e)}")
+            return {}
+
+    async def batch_insert_inventory_analysis_plan(self, records: List[tuple]) -> int:
+        """批量插入库存分析计划（mt_inventory_analysis_plan）
+        
+        Args:
+            records: 记录列表，每个元素为tuple，字段顺序与SQL对应
+        
+        Returns:
+            成功插入的记录数
+        """
+        if not records:
+            return 0
+        
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                cur.executemany('''
+                    REPLACE INTO mt_inventory_analysis_plan (
+                        fd_id, fd_warehouse_code, fd_material_code, fd_tech_id,
+                        fd_start_date, fd_end_date, fd_match_type, fd_identifier,
+                        fd_material_desc,
+                        fd_purchase_request_no, fd_purchase_request_item_no, fd_purchase_request_qty, fd_purchase_request_unit,
+                        fd_project_description, fd_project_definition, fd_wbs_element, fd_batch,
+                        fd_warehouse_name, fd_delivery_location, fd_inventory_level,
+                        fd_high_level, fd_replenish_level, fd_emergency_line,
+                        fd_current_stock, fd_unit, fd_purchase_request_price,
+                        fd_create_time, fd_update_time,
+                        fd_warehouse_location, fd_current_water_level,
+                        fd_in_transit_qty, fd_stock_status, fd_suggested_action,
+                        fd_compare_date, sub_class, fd_stock_level
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', records)
+                
+                conn.commit()
+                logger.info(f"[batch_insert_inventory_analysis_plan] 成功插入 {len(records)} 条记录")
+                return len(records)
+        except Exception as e:
+            logger.error(f"[DB] batch_insert_inventory_analysis_plan 执行失败: {str(e)}")
+            return 0
+
+    async def batch_upsert_water_level_config(self, records: List[tuple]) -> int:
+        """批量更新/插入水位配置（mt_water_level_config）
+        
+        Args:
+            records: 记录列表，格式为：
+                (material_code, material_name, tech_id, warehouse_code, warehouse_name,
+                 emergency_factor, replenish_factor, high_factor,
+                 replenish_trigger_value, emergency_line, mid_line, high_line,
+                 month, create_time)
+        
+        Returns:
+            成功操作的记录数
+        """
+        if not records:
+            return 0
+        
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                cur.executemany('''
+                    REPLACE INTO mt_water_level_config (
+                        fd_material_code, fd_material_name, fd_tech_id, fd_warehouse_code, fd_warehouse_name,
+                        fd_low_water_coefficient, fd_mid_water_coefficient, fd_high_water_coefficient,
+                        fd_replenish_trigger_value, fd_low_water_value, fd_mid_water_value, fd_high_water_value,
+                        fd_reserve_quota, fd_month, fd_create_time
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', records)
+                
+                conn.commit()
+                logger.info(f"[batch_upsert_water_level_config] 成功操作 {len(records)} 条记录")
+                return len(records)
+        except Exception as e:
+            logger.error(f"[DB] batch_upsert_water_level_config 执行失败: {str(e)}")
+            return 0
+
 
 real_db = RealDB()

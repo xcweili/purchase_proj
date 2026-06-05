@@ -120,15 +120,16 @@ code_sandbox = CodeSandbox()
 
 def calculate_water_levels(outbound_data: List[dict]) -> dict:
     """
-    基于历史出库数据计算水位线
+    基于历史出库数据动态计算水位线
     
     算法：
-    1. 统计分析：计算均值、中位数、标准差
-    2. 同比环比分析
-    3. 水位线计算：
-       - 应急线 = 中位数 × 0.5
-       - 补库线 = 中位数 × 2
-       - 高位线 = 中位数 × 4
+    1. 统计分析：计算均值、中位数、标准差、变异系数
+    2. 趋势分析：同比环比判断
+    3. 动态水位线计算（基于数据特征，不固定系数）：
+       - 基准消耗：根据数据分布选择均值或中位数
+       - 应急线：覆盖约1个月紧急需求，根据CV动态调整
+       - 补库线：覆盖1.5-2.5个月，考虑波动和趋势
+       - 高位线：覆盖2.5-4个月，能应对历史峰值
     """
     if not outbound_data:
         return {
@@ -144,7 +145,6 @@ def calculate_water_levels(outbound_data: List[dict]) -> dict:
     
     # 提取出库数据
     outbound_values = [float(d.get('outbound_qty', 0)) for d in outbound_data if d.get('outbound_qty')]
-    dates = [d.get('date') for d in outbound_data if d.get('date')]
     
     if not outbound_values:
         return {
@@ -159,48 +159,97 @@ def calculate_water_levels(outbound_data: List[dict]) -> dict:
         }
     
     # 统计计算
-    avg_outbound = np.mean(outbound_values)
-    median_outbound = np.median(outbound_values)
-    std_outbound = np.std(outbound_values)
+    avg_outbound = float(np.mean(outbound_values))
+    median_outbound = float(np.median(outbound_values))
+    std_outbound = float(np.std(outbound_values))
+    max_outbound = float(np.max(outbound_values))
     
-    # 计算变异系数判断稳定性
+    # 计算变异系数(CV)判断数据波动
     cv = std_outbound / avg_outbound if avg_outbound > 0 else 0
     
-    # 水位线计算（基于中位数）
-    emergency_line = median_outbound * 0.5   # 应急线：半个月用量
-    replenish_line = median_outbound * 2     # 补库线：2个月用量
-    high_line = median_outbound * 4          # 高位线：4个月用量
+    # 判断均值和中位数差异，选择更稳健的基准
+    if avg_outbound > 0:
+        median_avg_ratio = abs(median_outbound - avg_outbound) / avg_outbound
+    else:
+        median_avg_ratio = 0
     
-    # 判断季节性
+    if median_avg_ratio > 0.3:
+        # 差异大，说明有极端值干扰，用中位数更稳健
+        base_value = median_outbound
+    else:
+        # 差异小，用平均值(更充分利用数据)
+        base_value = avg_outbound
+    
+    # 趋势分析
+    trend = '平稳'
+    trend_factor = 1.0
+    if len(outbound_values) >= 6:
+        half = len(outbound_values) // 2
+        recent_half = outbound_values[-half:]
+        early_half = outbound_values[:half]
+        recent_avg = float(np.mean(recent_half))
+        early_avg = float(np.mean(early_half))
+        if early_avg > 0:
+            change_rate = (recent_avg - early_avg) / early_avg
+            if change_rate > 0.15:
+                trend = '上升'
+                trend_factor = 1.0 + min(change_rate, 0.5)  # 趋势上调，最多+50%
+            elif change_rate < -0.15:
+                trend = '下降'
+                trend_factor = 1.0 + max(change_rate, -0.3)  # 趋势下调，最多-30%
+    
+    # ========== 动态水位线计算 ==========
+    # CV修正系数：波动越大，安全系数越高
+    # CV=0(完全稳定) → cv_factor≈0.6
+    # CV=0.5(中等波动) → cv_factor≈1.0
+    # CV=1.0(高波动) → cv_factor≈1.5
+    # CV>=2.0(极高波动) → cv_factor→2.0
+    cv_factor = 0.6 + min(cv, 2.0) * 0.7
+    
+    # 应急线：覆盖约1个月的最基本安全库存
+    # 基准 × CV因子 × 趋势因子
+    emergency_line = base_value * cv_factor * trend_factor
+    
+    # 补库线：覆盖1.5-2.5个月，给补库操作留足时间
+    # 在应急线基础上增加缓冲，波动大的给更多缓冲
+    supply_buffer = 1.0 + cv * 0.8  # 1.0~2.6
+    replenish_line = emergency_line * (1.0 + supply_buffer) * trend_factor
+    
+    # 高位线：覆盖2.5-4个月，应对峰值需求
+    # 应能覆盖历史最高出库的大部分情况，但不过度
+    peak_coverage = 0.7 + cv * 0.3  # 覆盖70%~100%的峰值
+    high_line_from_data = max_outbound * peak_coverage
+    # 同时参考补库线的倍数，取两者中较高者作为高位线
+    high_line_from_factor = replenish_line * (2.0 + cv * 1.5)  # 2.0~5.0倍补库线
+    high_line = max(high_line_from_data, high_line_from_factor)
+    
+    # 确保梯度合理：应急线 < 补库线 < 高位线
+    if replenish_line <= emergency_line:
+        replenish_line = emergency_line * 1.5
+    if high_line <= replenish_line:
+        high_line = replenish_line * 1.8
+    
+    # 判断季节性(基于CV)
     if cv < 0.2:
         seasonality = '稳定'
     elif cv < 0.4:
         seasonality = '轻微波动'
-    else:
+    elif cv < 0.7:
         seasonality = '波动较大'
-    
-    # 趋势分析（如果有日期数据）
-    trend = '平稳'
-    if len(outbound_values) >= 6:
-        recent = outbound_values[-3:]
-        earlier = outbound_values[:3]
-        recent_avg = np.mean(recent)
-        earlier_avg = np.mean(earlier)
-        if earlier_avg > 0:
-            change_rate = (recent_avg - earlier_avg) / earlier_avg
-            if change_rate > 0.2:
-                trend = '上升'
-            elif change_rate < -0.2:
-                trend = '下降'
+    else:
+        seasonality = '波动剧烈'
     
     return {
-        'avg_outbound': float(avg_outbound),
-        'median_outbound': float(median_outbound),
-        'std_outbound': float(std_outbound),
-        'cv': float(cv),
-        'emergency_line': float(emergency_line),
-        'replenish_line': float(replenish_line),
-        'high_line': float(high_line),
+        'avg_outbound': round(avg_outbound, 2),
+        'median_outbound': round(median_outbound, 2),
+        'std_outbound': round(std_outbound, 2),
+        'cv': round(cv, 3),
+        'base_value': round(base_value, 2),
+        'cv_factor': round(cv_factor, 3),
+        'trend_factor': round(trend_factor, 3),
+        'emergency_line': round(emergency_line, 2),
+        'replenish_line': round(replenish_line, 2),
+        'high_line': round(high_line, 2),
         'seasonality': seasonality,
         'trend': trend,
         'data_points': len(outbound_values)

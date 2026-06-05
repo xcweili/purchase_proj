@@ -116,7 +116,10 @@ class AllocationMatchRequest(BaseModel):
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMMDD）")
     endDate: Optional[str] = Field(default=None, description="结束日期（格式：YYYYMMDD）")
-    warehouseCode: str = Field(default="", description="仓库编码，为空时查询所有仓库")
+    warehouseCode: str = Field(default="", description="仓库编码，为空时查询所有仓库（水位线模式）")
+    majorCategory: str = Field(default="", description="物资大类编码，如'01'，空=全部（补库计划模式）")
+    mediumCategory: str = Field(default="", description="物资中类编码，如'0101'，空=全部（补库计划模式）")
+    smallCategory: str = Field(default="", description="物资小类编码，如'010101'，空=全部（补库计划模式）")
     mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
 
 class SupplierMatchRequest(BaseModel):
@@ -196,8 +199,16 @@ async def allocation_match_stream(request: AllocationMatchRequest):
 # ============================================
 @app.post("/api/inventory/analyze/stream")
 async def inventory_analyze_stream(request: InventoryAnalysisRequest):
-    """库存分析接口 - 流式输出"""
-    logger.info(request.warehouseCode)
+    """库存分析接口 - 流式输出
+    根据参数自动判断模式：
+    - 水位线模式：传入 warehouseCode（不含分类参数），AI分析历史出库数据生成水位线
+    - 补库计划模式：传入 majorCategory/mediumCategory/smallCategory，确定性算法+LLM总结
+    """
+    # 判断模式：有分类参数 → 补库计划模式；否则 → 水位线模式
+    is_replenishment_mode = bool(request.majorCategory or request.mediumCategory or request.smallCategory)
+    mode_name = "补库计划" if is_replenishment_mode else "水位线"
+    logger.info(f"[InventoryStream] 模式={mode_name}, warehouseCode={request.warehouseCode}, "
+                f"majorCategory={request.majorCategory}, mediumCategory={request.mediumCategory}, smallCategory={request.smallCategory}")
 
     # 创建会话
     session_id = session_manager.create_session("inventory")
@@ -219,18 +230,34 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
 
     async def response_generator():
         try:
-            async for chunk in inventory_analysis_stream_service.stream_analyze(
-                start_date=request.startDate,
-                end_date=request.endDate,
-                warehouse_code=request.warehouseCode,
-                session_id=session_id
-            ):
-                # 检查会话是否被取消
-                if session_manager.is_session_cancelled(session_id):
-                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
-                    logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
-                    break
-                yield chunk
+            if is_replenishment_mode:
+                # 补库计划模式
+                async for chunk in inventory_analysis_stream_service.stream_analyze_replenishment_plan(
+                    major_category=request.majorCategory,
+                    medium_category=request.mediumCategory,
+                    small_category=request.smallCategory,
+                    start_date=request.startDate,
+                    end_date=request.endDate,
+                    session_id=session_id
+                ):
+                    if session_manager.is_session_cancelled(session_id):
+                        yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
+                        logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
+                        break
+                    yield chunk
+            else:
+                # 水位线模式
+                async for chunk in inventory_analysis_stream_service.stream_analyze_water_level(
+                    start_date=request.startDate,
+                    end_date=request.endDate,
+                    warehouse_code=request.warehouseCode,
+                    session_id=session_id
+                ):
+                    if session_manager.is_session_cancelled(session_id):
+                        yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
+                        logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
+                        break
+                    yield chunk
         except asyncio.CancelledError:
             logger.info(f"[InventoryStream] 流式响应被取消: {session_id}")
             yield "\n\n❌ 【会话已终止】连接已关闭\n"

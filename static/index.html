@@ -543,8 +543,38 @@
 
                         <div id="inventory-params" class="params-section" style="display: none;">
                             <div class="param-group">
+                                <label class="param-label">分析模式说明</label>
+                                <div style="padding: 10px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffc107; font-size: 0.82rem; color: #795548; line-height: 1.5;">
+                                    <b>水位线模式</b>：填写仓库编码，AI分析历史出库生成水位线<br>
+                                    <b>补库计划模式</b>：填写物资分类编码，确定性算法+LLM总结
+                                </div>
+                            </div>
+                            <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
+                                <label class="param-label" style="color: #667eea;">🔹 水位线模式参数</label>
+                            </div>
+                            <div class="param-group">
                                 <label class="param-label">仓库编码</label>
                                 <input type="text" class="param-input" id="inventory-warehouse" placeholder="如: MGA0，留空则查询所有仓库" value="MGA0">
+                                <div class="param-hint">示例: MGA0（国网湖南物资公司张家界周转库）</div>
+                            </div>
+                            <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
+                                <label class="param-label" style="color: #e67e22;">🔸 补库计划模式参数</label>
+                                <div class="param-hint" style="margin-bottom: 8px;">填写以下分类编码将自动进入补库计划模式</div>
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">物资大类编码</label>
+                                <input type="text" class="param-input" id="inventory-major" placeholder="如: 03，留空=全部" value="">
+                                <div class="param-hint">示例: 03（电缆及附件），留空则忽略大类筛选</div>
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">物资中类编码</label>
+                                <input type="text" class="param-input" id="inventory-medium" placeholder="如: 0302，留空=全部" value="">
+                                <div class="param-hint">示例: 0302（电力电缆），留空则忽略中类筛选</div>
+                            </div>
+                            <div class="param-group">
+                                <label class="param-label">物资小类编码</label>
+                                <input type="text" class="param-input" id="inventory-small" placeholder="如: 030201，留空=全部" value="">
+                                <div class="param-hint">示例: 030201（10kV电力电缆），留空则忽略小类筛选</div>
                             </div>
                         </div>
 
@@ -900,6 +930,9 @@
                 case 'inventory':
                     return {
                         warehouseCode: document.getElementById('inventory-warehouse').value || '',
+                        majorCategory: document.getElementById('inventory-major').value || '',
+                        mediumCategory: document.getElementById('inventory-medium').value || '',
+                        smallCategory: document.getElementById('inventory-small').value || '',
                         mock: useMock
                     };
                 case 'supplier':

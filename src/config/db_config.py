@@ -15,18 +15,18 @@ DB_TYPE_MYSQL = 'mysql'
 CURRENT_DB_TYPE = DB_TYPE_MYSQL
 
 # MySQL配置
-MYSQL_CONFIG: Dict[str, any] = {
-    'host': '25.212.252.199',
-    'port': 13306,
-    'user': 'wztppt230',
-    'password': 'HNxt@2025',
-    'database': 'ai_project',
-    'charset': 'utf8mb4',
-    'cursorclass': 'DictCursor',
-    'connect_timeout': 5,
-    'read_timeout': 5,
-    'write_timeout': 5
-}
+# MYSQL_CONFIG: Dict[str, any] = {
+#     'host': '25.212.252.199',
+#     'port': 13306,
+#     'user': 'wztppt230',
+#     'password': 'HNxt@2025',
+#     'database': 'ai_project',
+#     'charset': 'utf8mb4',
+#     'cursorclass': 'DictCursor',
+#     'connect_timeout': 5,
+#     'read_timeout': 5,
+#     'write_timeout': 5
+# }
 
 # MySQL配置 (待启用 - 备用配置)
 # MYSQL_CONFIG = {
@@ -38,6 +38,17 @@ MYSQL_CONFIG: Dict[str, any] = {
 #     'charset': 'utf8mb4',
 #     'cursorclass': 'DictCursor'
 # }
+
+# MySQL配置 (本地)
+MYSQL_CONFIG = {
+    'host': '127.0.0.1',
+    'port': 3306,
+    'user': 'root',
+    'password': '123456',
+    'database': 'local_db',
+    'charset': 'utf8mb4',
+    'cursorclass': 'DictCursor'
+}
 
 
 def get_db_config(db_type: str = None) -> Dict[str, any]:

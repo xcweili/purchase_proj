@@ -367,6 +367,9 @@ class ContextManager:
                         'materialDesc': sd.get('material_desc', ''),
                         '统计数据': sd.get('statistics', {}),
                     }
+                    # 同步传播 water_level_factors（动态算法已计算）
+                    if sd.get('water_level_factors'):
+                        original_data[idx]['water_level_factors'] = sd['water_level_factors']
         elif data_type in ('allocation', 'supplier') and isinstance(original_data, dict):
             plans = original_data.get('plans', [])
             for idx, sd in enumerate(structured_data):
