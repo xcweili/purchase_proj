@@ -523,8 +523,11 @@ class InventoryAnalysisStreamService:
                 # 获取物料分类描述
                 class_key = f"{str(material_code)}_{tech_id}"
                 class_info = material_class_map.get(class_key, {})
+                big_class_code = class_info.get('big_class_code', '')
                 big_class_desc = class_info.get('big_class_desc', '')
+                middle_class_code = class_info.get('middle_class_code', '')
                 middle_class_desc = class_info.get('middle_class_desc', '')
+                subclass_code = class_info.get('subclass_code', '')
                 subclass_desc = class_info.get('subclass_desc', '')
                 
                 if material_code and tech_id:
@@ -542,8 +545,11 @@ class InventoryAnalysisStreamService:
                         replenish_line,
                         high_line,
                         replenish_line,  # fd_reserve_quota 库存定额
+                        big_class_code,
                         big_class_desc,
+                        middle_class_code,
                         middle_class_desc,
+                        subclass_code,
                         subclass_desc,
                         datetime.now().strftime('%Y%m'),
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -567,62 +573,43 @@ class InventoryAnalysisStreamService:
                                                  small_category: str = '', start_date: str = None, end_date: str = None,
                                                  session_id: str = None):
         """补库计划模式 - 确定性算法分析 + LLM总结
-        1. 根据分类编码查询 mt_deposit_materials → 获取物资列表
-        2. 批量查询 mt_water_level_config → 获取水位配置
-        3. 批量查询当前库存+在途库存
-        4. 逐条确定性对比 → 判断状态（建议补库/立即补库/正常）
-        5. 入库 mt_inventory_analysis_plan
-        6. LLM总结输出
+        1. 直接从 mt_water_level_config 按分类编码查询水位配置（不再依赖 mt_deposit_materials）
+        2. 批量查询当前库存+在途库存
+        3. 逐条确定性对比 → 判断状态（建议补库/立即补库/正常）
+        4. 入库 mt_inventory_analysis_plan
+        5. LLM总结输出
         """
         yield "🚀 【智能补库计划系统】正在启动补库计划分析引擎...\n\n"
         yield f"📋 【任务概述】\n"
-        yield f"   本系统将基于物资分类编码，查询储备物资清单，\n"
-        yield f"   并结合水位配置和当前库存，进行补库需求分析。\n"
+        yield f"   本系统将直接基于水位配置表，按物资分类编码查询，\n"
+        yield f"   并结合当前库存进行补库需求分析。\n"
         yield f"   分析参数：大类={major_category or '全部'}, 中类={medium_category or '全部'}, 小类={small_category or '全部'}\n\n"
         
         try:
-            # ========== 阶段一：查询储备物资 ==========
-            yield "🔍 【阶段一：查询储备物资】\n"
-            yield "   📌 当前需求：根据分类编码从 mt_deposit_materials 查询物资列表\n"
+            # ========== 阶段一：查询水位配置 ==========
+            yield "🔍 【阶段一：查询水位配置】\n"
+            yield "   📌 当前需求：直接从 mt_water_level_config 按分类编码查询水位配置\n"
             yield "   └─ 正在查询...\n"
             
-            deposit_materials = await self.db.fetch_deposit_materials_by_category(
+            water_configs = await self.db.fetch_water_level_configs_by_category(
                 major_category, medium_category, small_category
             )
             
-            if not deposit_materials:
-                yield "❌ 未查询到符合条件的储备物资\n"
-                yield "   💡 建议：请检查分类编码是否正确，或确认 mt_deposit_materials 表中是否有数据\n"
+            if not water_configs:
+                yield "❌ 未查询到符合条件的水位配置\n"
+                yield "   💡 建议：请检查分类编码是否正确，或确认 mt_water_level_config 表中是否有数据\n"
                 return
-            
-            yield f"✅ 查询到 {len(deposit_materials)} 个储备物资\n"
-            yield f"   └─ 涉及大类：{len(set(m.get('fd_big_class_code') for m in deposit_materials if m.get('fd_big_class_code')))} 个\n\n"
-            
-            # ========== 阶段二：查询水位配置 ==========
-            yield "🔍 【阶段二：查询水位配置】\n"
-            yield "   📌 当前需求：从 mt_water_level_config 批量查询水位配置\n"
-            yield "   📌 执行动作：根据物资编码和技术规范ID批量查询\n"
-            yield "   └─ 正在查询...\n"
-            
-            material_codes = list(set(str(m['fd_material_code']) for m in deposit_materials))
-            tech_ids = list(set(m['fd_tech_spec_id'] for m in deposit_materials if m.get('fd_tech_spec_id')))
-            
-            water_configs = await self.db.fetch_water_level_configs_batch(material_codes, tech_ids)
             
             yield f"✅ 查询到 {len(water_configs)} 条水位配置\n"
             
-            # 构建水位配置索引：(material_code, tech_id, warehouse_code) → config
-            water_config_index = {}
             warehouse_codes_set = set()
             for wc in water_configs:
-                key = (str(wc['fd_material_code']), wc['fd_tech_id'], wc['fd_warehouse_code'])
-                water_config_index[key] = wc
                 warehouse_codes_set.add(wc['fd_warehouse_code'])
             
             yield f"   └─ 涉及 {len(warehouse_codes_set)} 个仓库\n\n"
             
-            # ========== 阶段三：查询仓库信息 ==========
-            yield "🔍 【阶段三：查询仓库信息】\n"
+            # ========== 阶段二：查询仓库信息 ==========
+            yield "🔍 【阶段二：查询仓库信息】\n"
             yield "   📌 当前需求：从 mt_base_warehouse_info 批量查询仓库基础信息\n"
             yield "   └─ 正在查询...\n"
             
@@ -630,8 +617,8 @@ class InventoryAnalysisStreamService:
             
             yield f"✅ 查询到 {len(warehouse_info)} 个仓库信息\n\n"
             
-            # ========== 阶段四：查询库存数据 ==========
-            yield "🔍 【阶段四：查询当前库存】\n"
+            # ========== 阶段三：查询库存数据 ==========
+            yield "🔍 【阶段三：查询当前库存】\n"
             yield "   📌 当前需求：从 w_stock_info_0808 批量查询当前库存+在途库存\n"
             yield "   └─ 正在查询...\n"
             
@@ -645,8 +632,8 @@ class InventoryAnalysisStreamService:
             
             yield f"✅ 查询到 {len(stock_data)} 个组合的库存数据\n\n"
             
-            # ========== 阶段五：确定性对比分析 ==========
-            yield "⚡ 【阶段五：智能对比分析】\n"
+            # ========== 阶段四：确定性对比分析 ==========
+            yield "⚡ 【阶段四：智能对比分析】\n"
             yield "   📌 当前需求：将当前库存+在途总量与水位线进行对比\n"
             yield "   📌 判定规则：\n"
             yield "      • 可用库存 ≤ 应急线 → 立即补库\n"
@@ -667,7 +654,7 @@ class InventoryAnalysisStreamService:
                 warehouse_name = wc.get('fd_warehouse_name', '')
                 material_name = wc.get('fd_material_name', '')
                 
-                # 获取水位系数
+                # 水位线值和分类信息均来自 mt_water_level_config
                 low_coef = float(wc.get('fd_low_water_coefficient', 0.5) or 0.5)
                 mid_coef = float(wc.get('fd_mid_water_coefficient', 1.0) or 1.0)
                 high_coef = float(wc.get('fd_high_water_coefficient', 2.0) or 2.0)
@@ -684,6 +671,7 @@ class InventoryAnalysisStreamService:
                 current_stock = float(stock.get('current_stock', 0) or 0)
                 in_transit_stock = float(stock.get('in_transit_stock', 0) or 0)
                 available_stock = current_stock + in_transit_stock
+                stock_unit = stock.get('unit', '')
                 
                 # 判定状态
                 if available_stock <= emergency_line:
@@ -703,12 +691,16 @@ class InventoryAnalysisStreamService:
                     suggested_action = '正常'
                     normal_count += 1
                 
-                # 获取物资分类信息（从deposit_materials中查找）
-                material_cat_info = {}
-                for dm in deposit_materials:
-                    if str(dm['fd_material_code']) == material_code and dm.get('fd_tech_spec_id') == tech_id:
-                        material_cat_info = dm
-                        break
+                # 计算推荐补货量
+                # 规则：补货量 + 库存量 + 在途量 > 补库线 且 < 高位线
+                if stock_status in ('紧急', '低'):
+                    # 目标：让总可用量达到补库线，这样总库存处于中位和高位之间
+                    recommended_qty = max(0, replenish_line - available_stock)
+                    # 如果差值太小（四舍五入导致），加一个小缓冲确保 > 补库线
+                    if recommended_qty == 0 and available_stock < replenish_line:
+                        recommended_qty = max(1, round(replenish_line * 0.05, 2))
+                else:
+                    recommended_qty = 0
                 
                 wh_info = warehouse_info.get(warehouse_code, {})
                 inventory_level = wh_info.get('level', '')
@@ -718,7 +710,7 @@ class InventoryAnalysisStreamService:
                     'warehouse_name': warehouse_name or wh_info.get('name', ''),
                     'inventory_level': inventory_level,
                     'material_code': material_code,
-                    'material_desc': material_name or material_cat_info.get('fd_material_desc', ''),
+                    'material_desc': material_name,
                     'tech_id': tech_id,
                     'current_stock': current_stock,
                     'in_transit_stock': in_transit_stock,
@@ -729,14 +721,16 @@ class InventoryAnalysisStreamService:
                     'low_coef': low_coef,
                     'mid_coef': mid_coef,
                     'high_coef': high_coef,
+                    'recommended_qty': round(recommended_qty, 2),
+                    'unit': stock_unit,
                     'stock_status': stock_status,
                     'suggested_action': suggested_action,
-                    'big_class_code': material_cat_info.get('fd_big_class_code', ''),
-                    'big_class_desc': material_cat_info.get('fd_big_class_desc', ''),
-                    'middle_class_code': material_cat_info.get('fd_middle_class_code', ''),
-                    'middle_class_desc': material_cat_info.get('fd_middle_class_desc', ''),
-                    'subclass_code': material_cat_info.get('fd_subclass_code', ''),
-                    'subclass_desc': material_cat_info.get('fd_subclass_desc', ''),
+                    'big_class_code': wc.get('big_class_code', ''),
+                    'big_class_desc': wc.get('big_class_desc', ''),
+                    'middle_class_code': wc.get('middle_class_code', ''),
+                    'middle_class_desc': wc.get('middle_class_desc', ''),
+                    'subclass_code': wc.get('subclass_code', ''),
+                    'subclass_desc': wc.get('subclass_desc', ''),
                 })
             
             total = len(analysis_results)
@@ -746,8 +740,8 @@ class InventoryAnalysisStreamService:
             yield f"   └─ 建议补库：{suggest_count} 条\n"
             yield f"   └─ 正常：{normal_count} 条\n\n"
             
-            # ========== 阶段六：数据入库 ==========
-            yield "💾 【阶段六：数据入库】\n"
+            # ========== 阶段五：数据入库 ==========
+            yield "💾 【阶段五：数据入库】\n"
             yield "   📌 当前需求：将分析结果写入 mt_inventory_analysis_plan\n"
             yield "   └─ 正在入库...\n"
             
@@ -778,8 +772,8 @@ class InventoryAnalysisStreamService:
                     ar['material_desc'],                             # fd_material_desc
                     '',                                             # fd_purchase_request_no
                     '',                                             # fd_purchase_request_item_no
-                    0,                                              # fd_purchase_request_qty
-                    '',                                             # fd_purchase_request_unit
+                    ar['recommended_qty'],                          # fd_purchase_request_qty
+                    ar['unit'],                                     # fd_purchase_request_unit
                     '',                                             # fd_project_description
                     '',                                             # fd_project_definition
                     '',                                             # fd_wbs_element
@@ -791,7 +785,7 @@ class InventoryAnalysisStreamService:
                     ar['replenish_line'],                           # fd_replenish_level
                     ar['emergency_line'],                           # fd_emergency_line
                     ar['current_stock'],                            # fd_current_stock
-                    '',                                             # fd_unit
+                    ar['unit'],                                     # fd_unit
                     0,                                              # fd_purchase_request_price
                     now_str,                                        # fd_create_time
                     now_str,                                        # fd_update_time
@@ -808,8 +802,8 @@ class InventoryAnalysisStreamService:
             saved = await self.db.batch_insert_inventory_analysis_plan(db_records)
             yield f"✅ 数据入库完成，成功保存 {saved} 条记录\n\n"
             
-            # ========== 阶段七：LLM总结 ==========
-            yield "🤖 【阶段七：智能总结】\n"
+            # ========== 阶段六：LLM总结 ==========
+            yield "🤖 【阶段六：智能总结】\n"
             yield "   📌 当前需求：基于分析汇总数据，生成智能总结报告\n"
             yield "   └─ 正在生成总结...\n"
             yield "────────────────────────────────────────\n"
@@ -841,6 +835,8 @@ class InventoryAnalysisStreamService:
                     '应急线': round(ar['emergency_line'], 2),
                     '补库线': round(ar['replenish_line'], 2),
                     '高位线': round(ar['high_line'], 2),
+                    '推荐补货量': ar['recommended_qty'],
+                    '单位': ar['unit'],
                     '库存状态': ar['stock_status'],
                     '建议操作': ar['suggested_action']
                 })
@@ -1629,7 +1625,9 @@ class InventoryAnalysisStreamService:
 
             query = f'''
                 SELECT DISTINCT fd_material_code, fd_tech_spec_id,
-                       fd_big_class_desc, fd_middle_class_desc, fd_subclass_desc
+                       fd_big_class_code, fd_big_class_desc,
+                       fd_middle_class_code, fd_middle_class_desc,
+                       fd_subclass_code, fd_subclass_desc
                 FROM mt_deposit_materials
                 WHERE (fd_material_code, fd_tech_spec_id) IN ({pair_placeholders})
             '''
@@ -1639,8 +1637,11 @@ class InventoryAnalysisStreamService:
             for row in rows:
                 key = f"{str(row['fd_material_code'])}_{row['fd_tech_spec_id']}"
                 result[key] = {
+                    'big_class_code': row.get('fd_big_class_code', '') or '',
                     'big_class_desc': row.get('fd_big_class_desc', '') or '',
+                    'middle_class_code': row.get('fd_middle_class_code', '') or '',
                     'middle_class_desc': row.get('fd_middle_class_desc', '') or '',
+                    'subclass_code': row.get('fd_subclass_code', '') or '',
                     'subclass_desc': row.get('fd_subclass_desc', '') or ''
                 }
 

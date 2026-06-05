@@ -687,6 +687,57 @@ class RealDB:
             logger.error(f"[DB] fetch_water_level_configs_batch 执行失败: {str(e)}")
             return []
 
+    async def fetch_water_level_configs_by_category(self, major_category: str = '', medium_category: str = '',
+                                                     small_category: str = '') -> List[Dict]:
+        """根据物资分类编码直接从 mt_water_level_config 查询水位配置
+        
+        不再依赖 mt_deposit_materials，直接在 mt_water_level_config 表中
+        按 big_class_code / middle_class_code / subclass_code 过滤。
+
+        Args:
+            major_category: 物资大类编码，如 "03"
+            medium_category: 物资中类编码
+            small_category: 物资小类编码
+        
+        Returns:
+            水位配置列表，包含各仓库下的完整水位配置信息
+        """
+        logger.info(f"[fetch_water_level_configs_by_category] major={major_category}, medium={medium_category}, small={small_category}")
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                query = '''
+                    SELECT fd_warehouse_code, fd_warehouse_name, fd_material_code, fd_material_name,
+                           fd_tech_id, fd_low_water_coefficient, fd_mid_water_coefficient,
+                           fd_high_water_coefficient, fd_replenish_trigger_value,
+                           fd_low_water_value, fd_mid_water_value, fd_high_water_value,
+                           big_class_code, big_class_desc,
+                           middle_class_code, middle_class_desc,
+                           subclass_code, subclass_desc
+                    FROM mt_water_level_config
+                    WHERE 1=1
+                '''
+                params = []
+                
+                if major_category:
+                    query += " AND big_class_code = %s"
+                    params.append(major_category)
+                if medium_category:
+                    query += " AND middle_class_code = %s"
+                    params.append(medium_category)
+                if small_category:
+                    query += " AND subclass_code = %s"
+                    params.append(small_category)
+                
+                cur.execute(query, params)
+                results = cur.fetchall()
+                logger.info(f"[fetch_water_level_configs_by_category] 查询到 {len(results)} 条水位配置")
+                return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"[DB] fetch_water_level_configs_by_category 执行失败: {str(e)}")
+            return []
+
     async def batch_get_stock_for_combos(self, combos: List[tuple]) -> Dict[tuple, Dict]:
         """批量查询指定组合的当前库存和在途库存
         
@@ -717,10 +768,11 @@ class RealDB:
                 query = f'''
                     SELECT
                         w.loc_code as warehouse_code,
-                        w.loc_name as warehouse_name,
+                        MAX(w.loc_name) as warehouse_name,
                         w.material_code,
-                        w.material_desc,
+                        MAX(w.material_desc) as material_desc,
                         w.tech_id,
+                        MAX(w.munit) as unit,
                         SUM(CASE WHEN w.source_type IS NULL OR w.source_type != '在途' THEN w.stock_qty ELSE 0 END) as current_stock,
                         SUM(CASE WHEN w.source_type = '在途' THEN w.stock_qty ELSE 0 END) as in_transit_stock
                     FROM w_stock_info_0808 w
@@ -742,6 +794,7 @@ class RealDB:
                         'material_code': str(row['material_code']),
                         'material_desc': row['material_desc'] or '',
                         'tech_id': row['tech_id'],
+                        'unit': row['unit'] or '',
                         'current_stock': float(row['current_stock'] or 0),
                         'in_transit_stock': float(row['in_transit_stock'] or 0),
                     }
@@ -837,7 +890,8 @@ class RealDB:
                 (material_code, material_name, tech_id, warehouse_code, warehouse_name,
                  emergency_factor, replenish_factor, high_factor,
                  replenish_trigger_value, emergency_line, mid_line, high_line,
-                 reserve_quota, big_class_desc, middle_class_desc, subclass_desc,
+                 reserve_quota, big_class_code, big_class_desc,
+                 middle_class_code, middle_class_desc, subclass_code, subclass_desc,
                  month, create_time)
         
         Returns:
@@ -855,9 +909,10 @@ class RealDB:
                         fd_material_code, fd_material_name, fd_tech_id, fd_warehouse_code, fd_warehouse_name,
                         fd_low_water_coefficient, fd_mid_water_coefficient, fd_high_water_coefficient,
                         fd_replenish_trigger_value, fd_low_water_value, fd_mid_water_value, fd_high_water_value,
-                        fd_reserve_quota, big_class_desc, middle_class_desc, subclass_desc,
+                        fd_reserve_quota, big_class_code, big_class_desc, middle_class_code, middle_class_desc,
+                        subclass_code, subclass_desc,
                         fd_month, fd_create_time
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', records)
                 
                 conn.commit()
