@@ -14,69 +14,72 @@ DB_TYPE_MYSQL = 'mysql'
 # 当前使用的数据库类型
 CURRENT_DB_TYPE = DB_TYPE_MYSQL
 
-# MySQL配置(js)
-# MYSQL_CONFIG: Dict[str, any] = {
-#     'host': 'rm-j6j2fm50qw676ku2n.mysql.rds.ops.sgmc.sgcc.com.cn',
-#     'port': 13306,
-#     'user': 'pewz_user',
-#     'password': 'pewz$$12RRS',
-#     'database': 'pewz',
-#     'charset': 'utf8mb4',
-#     'cursorclass': 'DictCursor',
-#     'connect_timeout': 5,
-#     'read_timeout': 5,
-#     'write_timeout': 5
-# }
+# ============================================
+# MySQL 多环境配置（切换只需改下面一行）
+# ============================================
+CURRENT_MYSQL_PROFILE = "hn"
+# 可选值: "js" | "hn" | "local" | "local_dev"
 
-# MySQL配置(hn)
-# MYSQL_CONFIG: Dict[str, any] = {
-#     'host': '25.212.252.199',
-#     'port': 13306,
-#     'user': 'wztppt230',
-#     'password': 'HNxt@2025',
-#     'database': 'ai_project',
-#     'charset': 'utf8mb4',
-#     'cursorclass': 'DictCursor',
-#     'connect_timeout': 5,
-#     'read_timeout': 5,
-#     'write_timeout': 5
-# }
-
-# MySQL配置 (待启用 - 备用配置)
-# MYSQL_CONFIG = {
-#     'host': '192.168.1.1',
-#     'port': 3306,
-#     'user': 'root',
-#     'password': 'HN@123456',
-#     'database': 'ai',
-#     'charset': 'utf8mb4',
-#     'cursorclass': 'DictCursor'
-# }
-
-# MySQL配置 (待启用 - 备用配置)
-MYSQL_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3306,
-    'user': 'root',
-    'password': '123456',
-    'database': 'local_db',
-    'charset': 'utf8mb4',
-    'cursorclass': 'DictCursor'
+_MYSQL_PROFILES: Dict[str, dict] = {
+    "js": {
+        'host': 'rm-j6j2fm50qw676ku2n.mysql.rds.ops.sgmc.sgcc.com.cn',
+        'port': 13306,
+        'user': 'pewz_user',
+        'password': 'pewz$$12RRS',
+        'database': 'pewz',
+        'charset': 'utf8mb4',
+        'cursorclass': 'DictCursor',
+        'connect_timeout': 5,
+        'read_timeout': 5,
+        'write_timeout': 5,
+    },
+    "hn": {
+        'host': '25.212.252.199',
+        'port': 13306,
+        'user': 'wztppt230',
+        'password': 'HNxt@2025',
+        'database': 'ai_project',
+        'charset': 'utf8mb4',
+        'cursorclass': 'DictCursor',
+        'connect_timeout': 5,
+        'read_timeout': 5,
+        'write_timeout': 5,
+    },
+    "local": {
+        'host': '192.168.1.1',
+        'port': 3306,
+        'user': 'root',
+        'password': 'HN@123456',
+        'database': 'ai',
+        'charset': 'utf8mb4',
+        'cursorclass': 'DictCursor',
+    },
+    "local_dev": {
+        'host': '127.0.0.1',
+        'port': 3306,
+        'user': 'root',
+        'password': '123456',
+        'database': 'local_db',
+        'charset': 'utf8mb4',
+        'cursorclass': 'DictCursor',
+    },
 }
+
+MYSQL_CONFIG = _MYSQL_PROFILES[CURRENT_MYSQL_PROFILE]
 
 
 def get_db_config(db_type: str = None) -> Dict[str, any]:
     """
     获取数据库配置
-    
+
     Args:
         db_type: 数据库类型，不指定则使用当前配置的数据库类型
-    
+
     Returns:
         数据库配置字典
     """
     target_type = db_type or CURRENT_DB_TYPE
-    
+
     if target_type == DB_TYPE_MYSQL:
         return MYSQL_CONFIG
     elif target_type == DB_TYPE_SQLITE:
@@ -88,15 +91,15 @@ def get_db_config(db_type: str = None) -> Dict[str, any]:
 def set_db_type(db_type: str) -> bool:
     """
     切换数据库类型
-    
+
     Args:
         db_type: 数据库类型 (sqlite/mysql)
-    
+
     Returns:
         是否切换成功
     """
     global CURRENT_DB_TYPE
-    
+
     if db_type in [DB_TYPE_SQLITE, DB_TYPE_MYSQL]:
         CURRENT_DB_TYPE = db_type
         return True

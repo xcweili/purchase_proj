@@ -15,6 +15,7 @@
                     parse: function(text) { return text.replace(/\n/g, '<br>'); }
                 };
             }
+            onInventoryModeChange();
         });
     </script>
     <style>
@@ -543,12 +544,26 @@
 
                         <div id="inventory-params" class="params-section" style="display: none;">
                             <div class="param-group">
+                                <label class="param-label">分析模式选择</label>
+                                <div style="display: flex; gap: 12px;">
+                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                        <input type="radio" name="inventory-mode" value="water_level" checked onchange="onInventoryModeChange()">
+                                        <span style="color: #667eea; font-weight: bold;">水位线模式</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                        <input type="radio" name="inventory-mode" value="replenishment" onchange="onInventoryModeChange()">
+                                        <span style="color: #e67e22; font-weight: bold;">补库计划模式</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="param-group">
                                 <label class="param-label">分析模式说明</label>
                                 <div style="padding: 10px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffc107; font-size: 0.82rem; color: #795548; line-height: 1.5;">
                                     <b>水位线模式</b>：填写仓库编码，AI分析历史出库生成水位线<br>
                                     <b>补库计划模式</b>：填写物资分类编码，确定性算法+LLM总结
                                 </div>
                             </div>
+                            <div id="inventory-water-group">
                             <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
                                 <label class="param-label" style="color: #667eea;">🔹 水位线模式参数</label>
                             </div>
@@ -557,6 +572,8 @@
                                 <input type="text" class="param-input" id="inventory-warehouse" placeholder="如: MGA0，留空则查询所有仓库" value="MGA0">
                                 <div class="param-hint">示例: MGA0（国网湖南物资公司张家界周转库）</div>
                             </div>
+                            </div>
+                            <div id="inventory-replenish-group">
                             <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
                                 <label class="param-label" style="color: #e67e22;">🔸 补库计划模式参数</label>
                                 <div class="param-hint" style="margin-bottom: 8px;">填写以下分类编码将自动进入补库计划模式</div>
@@ -575,6 +592,7 @@
                                 <label class="param-label">物资小类编码</label>
                                 <input type="text" class="param-input" id="inventory-small" placeholder="如: 030201，留空=全部" value="">
                                 <div class="param-hint">示例: 030201（10kV电力电缆），留空则忽略小类筛选</div>
+                            </div>
                             </div>
                         </div>
 
@@ -927,14 +945,22 @@
                         materialCodes: parseCommaList(document.getElementById('allocation-materials').value),
                         mock: useMock
                     };
-                case 'inventory':
-                    return {
-                        warehouseCode: document.getElementById('inventory-warehouse').value || '',
-                        majorCategory: document.getElementById('inventory-major').value || '',
-                        mediumCategory: document.getElementById('inventory-medium').value || '',
-                        smallCategory: document.getElementById('inventory-small').value || '',
-                        mock: useMock
-                    };
+                case 'inventory': {
+                    const mode = document.querySelector('input[name="inventory-mode"]:checked').value;
+                    const body = { mock: useMock };
+                    if (mode === 'water_level') {
+                        body.warehouseCode = document.getElementById('inventory-warehouse').value || '';
+                        body.majorCategory = '';
+                        body.mediumCategory = '';
+                        body.smallCategory = '';
+                    } else {
+                        body.majorCategory = document.getElementById('inventory-major').value || '';
+                        body.mediumCategory = document.getElementById('inventory-medium').value || '';
+                        body.smallCategory = document.getElementById('inventory-small').value || '';
+                        // 不传 warehouseCode
+                    }
+                    return body;
+                }
                 case 'supplier':
                     return {
                         mock: useMock
@@ -947,6 +973,19 @@
         function parseCommaList(text) {
             if (!text || !text.trim()) return null;
             return text.split(',').map(item => item.trim()).filter(item => item);
+        }
+
+        function onInventoryModeChange() {
+            const mode = document.querySelector('input[name="inventory-mode"]:checked').value;
+            const waterGroup = document.getElementById('inventory-water-group');
+            const replenishGroup = document.getElementById('inventory-replenish-group');
+            if (mode === 'water_level') {
+                if (waterGroup) waterGroup.style.display = '';
+                if (replenishGroup) replenishGroup.style.display = 'none';
+            } else {
+                if (waterGroup) waterGroup.style.display = 'none';
+                if (replenishGroup) replenishGroup.style.display = '';
+            }
         }
     </script>
 </body>

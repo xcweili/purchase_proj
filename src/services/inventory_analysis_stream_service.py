@@ -67,118 +67,45 @@ class InventoryAnalysisStreamService:
             yield "🔍 【阶段一：确定仓库范围】\n"
             if warehouse_code:
                 yield f"   ✅ 使用指定仓库：{warehouse_code}\n"
-                yield f"   └─ 无需查询仓库主数据表，直接使用该仓库编码\n"
                 warehouse_codes = [warehouse_code]
-                try:
-                    warehouse_info = await asyncio.wait_for(
-                        asyncio.to_thread(self._get_warehouse_info_by_code_sync, warehouse_code),
-                        timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    yield "❌ 仓库信息查询超时：数据库响应超过 30 秒\n"
-                    yield "   💡 建议：请检查数据库连接状态\n"
-                    return
-                except Exception as e:
-                    logger.warning(f"获取仓库信息失败，使用简化信息: {str(e)}")
-                    warehouse_info = {warehouse_code: {'name': warehouse_code, 'level': ''}}
             else:
-                yield "   📌 当前需求：获取所有仓库的信息\n"
-                yield "   📌 执行动作：从仓库主数据表查询所有仓库\n"
-                yield "   └─ 正在执行仓库数据检索...\n"
-                logger.info("正在执行仓库数据检索...")
-                try:
-                    warehouse_info = await asyncio.wait_for(
-                        asyncio.to_thread(self._get_all_warehouse_info_sync),
-                        timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    yield "❌ 仓库数据采集超时：数据库响应超过 30 秒\n"
-                    yield "   💡 建议：请检查数据库连接状态或减少查询范围\n"
-                    return
-                warehouse_codes = list(warehouse_info.keys())
-
-                if not warehouse_codes:
-                    yield "❌ 仓库数据采集失败：未查询到符合条件的仓库\n"
-                    yield "   💡 建议：请检查仓库表中是否有数据\n"
-                    return
-
-                yield f"✅ 仓库数据采集成功\n"
-                yield f"   └─ 共获取 {len(warehouse_codes)} 个仓库节点\n"
-                yield f"   └─ 仓库列表：{', '.join(warehouse_codes[:5])}"
-                if len(warehouse_codes) > 5:
-                    yield f" ... 还有{len(warehouse_codes) - 5}个"
-                yield f"\n"
+                yield f"   � 查询所有仓库\n"
+                warehouse_codes = None  # 传 None 表示全部仓库
             
-            yield f"   └─ 下一步：查询该仓库下的物料 + 技术规范组合\n\n"
-            yield "🔍 【阶段二：物料数据采集】\n"
-            yield "   📌 当前需求：获取需要分析的物料编码列表\n"
-            yield "   📌 执行动作：从历史出库表提取指定仓库下有出库记录的物料编码\n"
-            yield "   📌 数据用途：物料编码是库存分析的核心维度，用于关联库存和消耗数据\n"
-            yield "   └─ 正在执行物料数据检索...\n"
-            logger.info("正在执行物料数据检索...")
+            # 合并阶段一~三：单次 to_thread 执行所有同步 DB 查询，避免频繁创建线程
+            yield f"   └─ 正在执行数据检索...\n"
             try:
-                material_codes = await asyncio.wait_for(
-                    asyncio.to_thread(self._get_all_material_codes_sync, warehouse_codes),
-                    timeout=30
-                )
-            except asyncio.TimeoutError:
-                yield "❌ 物料数据采集超时：数据库响应超过30秒\n"
-                yield "   💡 建议：请检查数据库连接状态或减少物料范围\n"
-                return
-            
-            if not material_codes:
-                yield "❌ 物料数据采集失败：未查询到符合条件的物料\n"
-                yield "   💡 建议：请检查仓库数据是否完整，或确认历史出库表中是否有数据\n"
-                return
-                
-            yield f"✅ 物料数据采集成功\n"
-            yield f"   └─ 共获取 {len(material_codes)} 个物料编码\n"
-            yield f"   └─ 物料示例: {', '.join(material_codes[:5])}"
-            if len(material_codes) > 5:
-                yield f" ... 还有{len(material_codes) - 5}个"
-            yield f"\n"
-            yield f"   └─ 数据质量：已验证物料编码格式有效性\n"
-            yield f"   └─ 下一步：构建仓库×物料×技术规范组合矩阵\n\n"
-
-            yield "🔍 【阶段三：组合矩阵构建】\n"
-            yield "   📌 当前需求：生成所有有效的仓库-物料-技术规范组合\n"
-            yield "   📌 执行动作：批量查询历史出库表，一次性获取所有有效组合\n"
-            yield "   📌 数据用途：\n"
-            yield "      • 分析单元：每个组合是一个独立的库存分析单元\n"
-            yield "      • 数据关联：通过组合关联库存和消耗数据\n"
-            yield "      • 批量分析：支持一次性分析多个组合\n"
-            yield "   📌 技术要点：\n"
-            yield "      • 批量查询：单次SQL查询替代N×M次逐条查询\n"
-            yield "      • 数据过滤：只包含有历史出库记录的有效组合\n"
-            yield "      • 数量限制：最多分析200个组合\n"
-            yield "   └─ 正在执行组合矩阵批量查询...\n"
-            logger.info(f"组合矩阵批量查询开始, warehouses={len(warehouse_codes)}, materials={len(material_codes)}")
-            try:
-                all_combinations = await asyncio.wait_for(
-                    asyncio.to_thread(self._get_valid_combinations_sync, warehouse_codes, material_codes, start_date, end_date),
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self._prepare_water_level_data_sync, warehouse_codes, start_date, end_date),
                     timeout=60
                 )
+                warehouse_info = result['warehouse_info']
+                warehouse_codes = result['warehouse_codes']
+                material_codes = result['material_codes']
+                all_combinations = result['all_combinations']
+                if not warehouse_codes:
+                    warehouse_codes = list(warehouse_info.keys())
             except asyncio.TimeoutError:
-                yield "❌ 组合矩阵查询超时：数据库响应超过60秒\n"
-                yield "   💡 建议：请缩小仓库或物料范围\n"
+                yield "❌ 数据检索超时\n"
                 return
-
-            # if len(all_combinations) > 200:
-            #     yield f"   ⚠️ 有效组合过多({len(all_combinations)}个)，限制前200个进行分析\n"
-            #     logger.warning(f"有效组合数({len(all_combinations)})超过上限, 截取前200个")
-            #     all_combinations = all_combinations[:200]
-
-            yield f"✅ 组合矩阵构建完成\n"
-            yield f"   └─ 共获取 {len(all_combinations)} 个有效组合\n"
-            if warehouse_codes:
-                yield f"   └─ 组合分布：覆盖 {len(set(c['warehouse_code'] for c in all_combinations))} 个仓库\n"
-            yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
-            logger.info(f"组合矩阵构建完成, 共{len(all_combinations)}个组合")
+            except Exception as e:
+                logger.warning(f"数据检索失败: {str(e)}")
+                yield f"❌ 数据检索失败: {str(e)}\n"
+                return
             
             if not all_combinations:
                 yield "❌ 组合构建失败：未找到有效的仓库×物料×技术规范组合\n"
                 yield "   💡 建议：请检查数据配置，确认仓库、物料、技术规范数据是否完整\n"
                 return
+
+            yield f"✅ 数据检索完成\n"
+            yield f"   └─ 共获取 {len(warehouse_codes)} 个仓库节点\n"
+            yield f"   └─ 共获取 {len(material_codes)} 个物料编码\n"
+            yield f"   └─ {len(all_combinations)} 个有效组合\n"
+            if warehouse_codes:
+                yield f"   └─ 组合分布：覆盖 {len(set(c['warehouse_code'] for c in all_combinations))} 个仓库\n"
+            yield f"   └─ 数据就绪：已准备好进入AI智能分析阶段\n\n"
+            logger.info(f"组合矩阵构建完成, 共{len(all_combinations)}个组合")
 
             # 检查会话是否已取消
             if session_id and session_manager.is_session_cancelled(session_id):
@@ -1336,6 +1263,114 @@ class InventoryAnalysisStreamService:
         return prompt
 
     # ==================== 数据查询方法（从 InventoryAnalysisService 迁移） ====================
+
+    def _prepare_water_level_data_sync(self, warehouse_codes: List[str], start_date: str, end_date: str) -> Dict:
+        """合并阶段一~三：单线程完成仓库信息+物料编码+有效组合的查询
+        
+        在一个线程内顺序执行三组 DB 查询，使用独立连接，避免频繁创建线程导致
+        "can't start new thread" 错误。
+        """
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cur = conn.cursor()
+            
+            # --- 阶段一：仓库信息 ---
+            warehouse_info = {}
+            if warehouse_codes:
+                # 指定仓库
+                placeholders = ','.join(['%s'] * len(warehouse_codes))
+                cur.execute(
+                    f'SELECT fd_warehouse_code, fd_warehouse_name, fd_stock_level '
+                    f'FROM mt_base_warehouse_info WHERE fd_warehouse_code IN ({placeholders})',
+                    warehouse_codes
+                )
+                rows = cur.fetchall()
+                warehouse_codes_out = []
+                for row in rows:
+                    warehouse_codes_out.append(row['fd_warehouse_code'])
+                    warehouse_info[row['fd_warehouse_code']] = {
+                        'name': row['fd_warehouse_name'] or '',
+                        'level': row['fd_stock_level'] or ''
+                    }
+            else:
+                # 全部仓库
+                cur.execute('SELECT fd_warehouse_code, fd_warehouse_name, fd_stock_level FROM mt_base_warehouse_info')
+                rows = cur.fetchall()
+                warehouse_codes_out = []
+                for row in rows:
+                    wc = row['fd_warehouse_code']
+                    if wc:
+                        warehouse_codes_out.append(wc)
+                        warehouse_info[wc] = {
+                            'name': row['fd_warehouse_name'] or '',
+                            'level': row['fd_stock_level'] or ''
+                        }
+            
+            if not warehouse_codes_out:
+                return {
+                    'warehouse_info': warehouse_info,
+                    'warehouse_codes': [],
+                    'material_codes': [],
+                    'all_combinations': []
+                }
+            
+            # --- 阶段二：物料编码 ---
+            w_placeholders = ','.join(['%s'] * len(warehouse_codes_out))
+            cur.execute(
+                f'SELECT DISTINCT fd_material_code FROM mt_historical_outbound '
+                f'WHERE fd_warehouse_code IN ({w_placeholders})',
+                warehouse_codes_out
+            )
+            material_codes = [str(row['fd_material_code']) for row in cur.fetchall() if row['fd_material_code']]
+            
+            if not material_codes:
+                return {
+                    'warehouse_info': warehouse_info,
+                    'warehouse_codes': warehouse_codes_out,
+                    'material_codes': [],
+                    'all_combinations': []
+                }
+            
+            # --- 阶段三：有效组合 ---
+            m_placeholders = ','.join(['%s'] * len(material_codes))
+            cur.execute(
+                f'SELECT fd_warehouse_code, fd_material_code, fd_tech_id, MAX(fd_material_name) as fd_material_name '
+                f'FROM mt_historical_outbound '
+                f'WHERE fd_warehouse_code IN ({w_placeholders}) '
+                f'AND fd_material_code IN ({m_placeholders}) '
+                f'GROUP BY fd_warehouse_code, fd_material_code, fd_tech_id',
+                warehouse_codes_out + material_codes
+            )
+            all_combinations = []
+            for row in cur.fetchall():
+                all_combinations.append({
+                    'warehouse_code': row['fd_warehouse_code'],
+                    'material_code': str(row['fd_material_code']),
+                    'tech_id': row['fd_tech_id'],
+                    'material_name': row['fd_material_name'] or ''
+                })
+            
+            logger.info(f"[prepare_data] warehouse={len(warehouse_codes_out)}, "
+                        f"material={len(material_codes)}, combinations={len(all_combinations)}")
+            
+            return {
+                'warehouse_info': warehouse_info,
+                'warehouse_codes': warehouse_codes_out,
+                'material_codes': material_codes,
+                'all_combinations': all_combinations
+            }
+        except Exception as e:
+            logger.error(f"[prepare_data] 失败: {str(e)}")
+            return {
+                'warehouse_info': {},
+                'warehouse_codes': warehouse_codes or [],
+                'material_codes': [],
+                'all_combinations': []
+            }
+        finally:
+            if conn:
+                conn.close()
 
     def _get_warehouse_info_by_code_sync(self, warehouse_code: str) -> Dict[str, Dict[str, str]]:
         """获取指定仓库编码的仓库信息"""

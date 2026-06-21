@@ -116,7 +116,7 @@ class AllocationMatchRequest(BaseModel):
 class InventoryAnalysisRequest(BaseModel):
     startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMMDD）")
     endDate: Optional[str] = Field(default=None, description="结束日期（格式：YYYYMMDD）")
-    warehouseCode: str = Field(default="", description="仓库编码，为空时查询所有仓库（水位线模式）")
+    warehouseCode: Optional[str] = Field(default=None, description="仓库编码，为空时查询所有仓库。传入此字段=水位线模式，不传=补库计划模式")
     majorCategory: str = Field(default="", description="物资大类编码，如'01'，空=全部（补库计划模式）")
     mediumCategory: str = Field(default="", description="物资中类编码，如'0101'，空=全部（补库计划模式）")
     smallCategory: str = Field(default="", description="物资小类编码，如'010101'，空=全部（补库计划模式）")
@@ -204,8 +204,10 @@ async def inventory_analyze_stream(request: InventoryAnalysisRequest):
     - 水位线模式：传入 warehouseCode（不含分类参数），AI分析历史出库数据生成水位线
     - 补库计划模式：传入 majorCategory/mediumCategory/smallCategory，确定性算法+LLM总结
     """
-    # 判断模式：有分类参数 → 补库计划模式；否则 → 水位线模式
-    is_replenishment_mode = bool(request.majorCategory or request.mediumCategory or request.smallCategory)
+    # 判断模式：
+    # - warehouseCode 在请求中存在 → 水位线模式（不管值为空还是非空）
+    # - warehouseCode 不在请求中 → 补库计划模式
+    is_replenishment_mode = (request.warehouseCode is None)
     mode_name = "补库计划" if is_replenishment_mode else "水位线"
     logger.info(f"[InventoryStream] 模式={mode_name}, warehouseCode={request.warehouseCode}, "
                 f"majorCategory={request.majorCategory}, mediumCategory={request.mediumCategory}, smallCategory={request.smallCategory}")

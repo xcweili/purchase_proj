@@ -26,13 +26,18 @@ class LLMProviderConfig:
         self.temperature = temperature
 
 
+# ============================================
+# LLM 提供商切换（只需改下面一行）
+# ============================================
+CURRENT_LLM_PROVIDER = "hn_tongyi"
+# 可选值: "deepseek" | "hn_tongyi" | "js_tongyi"
+
+
 class LLMConfig:
     """LLM服务配置"""
     def __init__(self):
         # 当前使用的LLM提供商
-        self.current_provider: str = "deepseek"
-        # self.current_provider: str = "tongyi"
-        # self.current_provider: str = "js_tongyi"
+        self.current_provider: str = CURRENT_LLM_PROVIDER
         
         # 各提供商配置
         self.providers: Dict[str, LLMProviderConfig] = {
@@ -42,8 +47,8 @@ class LLMConfig:
                 base_url="https://api.deepseek.com",
                 model="deepseek-v4-flash",
             ),
-            "tongyi": LLMProviderConfig(
-                name="tongyi",
+            "hn_tongyi": LLMProviderConfig(
+                name="hn_tongyi",
                 api_key="7dee7bb6b44242538317ee52c544e0a4",
                 base_url="http://25.212.230.144:80/lmp-cloud-ias-server/api/llm/chat/completions/V2",
                 model="通义千问2.5-72B",
