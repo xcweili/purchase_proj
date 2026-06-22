@@ -833,7 +833,10 @@ class AllocationStreamService:
                 query += " AND apply_way = %s"
                 params.append(plan_type)
 
-            query += " AND apply_way IN ('01', '05', '06')"
+            # 注：原硬编码 apply_way IN ('01','05','06') 与本地数据不符
+            # 本地数据中 apply_way 为中文 ('线下申报','线上申报')，已移除该硬编码
+            # 如需按申报方式过滤，通过 plan_type 参数传入即可
+            query += " AND apply_way IN ('01', '05', '06', '线下申报', '线上申报')"
 
             if warehouse_code:
                 query += " AND fd_warehouse_code = %s"
