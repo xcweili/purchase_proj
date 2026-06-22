@@ -193,10 +193,9 @@ class InventoryAnalysisStreamService:
             yield "   └─ 正在分析数据...\n"
 
             # 同步执行数据查询（不使用 to_thread，避免线程创建）
-            result = self._prepare_batch_analyze_data_sync(all_combinations, include_stock_data=include_stock_data, include_classification=True)
-            batch_stock = result['stock']
-            batch_outbound = result['outbound']
-            self._current_classification = result['classification']
+            batch_outbound = self._batch_get_outbound_data_sync(all_combinations)
+            batch_stock = self._batch_get_current_stock_sync(all_combinations) if include_stock_data else {}
+            self._current_classification = self._batch_get_material_classification_sync(all_combinations)
 
             total = len(all_combinations)
             last_report_pct = 0
