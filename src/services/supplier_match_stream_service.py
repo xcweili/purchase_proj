@@ -411,7 +411,7 @@ class SupplierMatchStreamService:
                                 '',                                # fd_bid_plan_no
                                 '',                                # fd_purch_no
                                 '',                                # fd_purch_line
-                                int(f_qty * f_price)               # fd_AllocRatio
+                                alloc_rate_val                    # fd_AllocRatio
                             )
 
                         batch_data.append(make_supplier_tuple('balanced', balanced_first, balanced_suppliers, balanced_status, balanced_allocated, balanced_total_cost, balanced_unmet, balanced_first_unit_price, balanced_first_allocated, balanced_first_cost))
