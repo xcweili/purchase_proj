@@ -72,22 +72,16 @@ class InventoryAnalysisStreamService:
                 yield f"   � 查询所有仓库\n"
                 warehouse_codes = None  # 传 None 表示全部仓库
             
-            # 合并阶段一~三：单次 to_thread 执行所有同步 DB 查询，避免频繁创建线程
+            # 同步执行数据检索（不使用 to_thread，避免线程创建）
             yield f"   └─ 正在执行数据检索...\n"
             try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(self._prepare_water_level_data_sync, warehouse_codes, start_date, end_date),
-                    timeout=60
-                )
+                result = self._prepare_water_level_data_sync(warehouse_codes, start_date, end_date)
                 warehouse_info = result['warehouse_info']
                 warehouse_codes = result['warehouse_codes']
                 material_codes = result['material_codes']
                 all_combinations = result['all_combinations']
                 if not warehouse_codes:
                     warehouse_codes = list(warehouse_info.keys())
-            except asyncio.TimeoutError:
-                yield "❌ 数据检索超时\n"
-                return
             except Exception as e:
                 logger.warning(f"数据检索失败: {str(e)}")
                 yield f"❌ 数据检索失败: {str(e)}\n"
@@ -198,11 +192,11 @@ class InventoryAnalysisStreamService:
                 yield "      • 统计计算：计算最高、最低、平均、中位数等指标\n"
             yield "   └─ 正在分析数据...\n"
 
-            if include_stock_data:
-                batch_stock = await asyncio.to_thread(self._batch_get_current_stock_sync, all_combinations)
-            else:
-                batch_stock = {}
-            batch_outbound = await asyncio.to_thread(self._batch_get_outbound_data_sync, all_combinations)
+            # 同步执行数据查询（不使用 to_thread，避免线程创建）
+            result = self._prepare_batch_analyze_data_sync(all_combinations, include_stock_data=include_stock_data, include_classification=True)
+            batch_stock = result['stock']
+            batch_outbound = result['outbound']
+            self._current_classification = result['classification']
 
             total = len(all_combinations)
             last_report_pct = 0
@@ -397,10 +391,11 @@ class InventoryAnalysisStreamService:
                 yield "✅ 智能重算完成，所有水位数据已生成\n"
             
             # ============ 水位线模式：仅写入 mt_water_level_config ============
-            # 批量获取物料分类信息（big_class_desc / middle_class_desc / subclass_desc）
-            material_class_map = await asyncio.to_thread(
-                self._batch_get_material_classification_sync, all_combo_data
-            )
+            # 使用之前缓存的物料分类信息（在 _batch_analyze 中已获取），不使用 to_thread
+            material_class_map = getattr(self, '_current_classification', {})
+            if not material_class_map:
+                # 兜底：如果缓存为空，同步查询（不使用 to_thread）
+                material_class_map = self._batch_get_material_classification_sync(all_combo_data)
 
             water_level_config_data = []
             for combo_data in all_combo_data:
