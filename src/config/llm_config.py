@@ -29,7 +29,7 @@ class LLMProviderConfig:
 # ============================================
 # LLM 提供商切换（只需改下面一行）
 # ============================================
-CURRENT_LLM_PROVIDER = "hn_tongyi"
+CURRENT_LLM_PROVIDER = "deepseek"
 # 可选值: "deepseek" | "hn_tongyi" | "js_tongyi"
 
 
@@ -43,7 +43,7 @@ class LLMConfig:
         self.providers: Dict[str, LLMProviderConfig] = {
             "deepseek": LLMProviderConfig(
                 name="deepseek",
-                api_key="sk-3f9a72b998164fd989a0c1b6df844669",
+                api_key="sk-f78a819f334c493f8afba989139dd6af",
                 base_url="https://api.deepseek.com",
                 model="deepseek-v4-flash",
             ),

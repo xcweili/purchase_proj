@@ -17,7 +17,7 @@ CURRENT_DB_TYPE = DB_TYPE_MYSQL
 # ============================================
 # MySQL 多环境配置（切换只需改下面一行）
 # ============================================
-CURRENT_MYSQL_PROFILE = "hn"
+CURRENT_MYSQL_PROFILE = "local_dev"
 # 可选值: "js" | "hn" | "local" | "local_dev"
 
 _MYSQL_PROFILES: Dict[str, dict] = {
