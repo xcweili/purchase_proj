@@ -1,992 +1,869 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>采购管理智能体 - 流式交互</title>
-    <script src="/static/marked.min.js"></script>
-    <script>
-        // 确保marked库可用，不可用时降级为纯文本
-        document.addEventListener('DOMContentLoaded', function() {
-            if (typeof marked === 'undefined') {
-                console.warn('marked库加载失败，降级为纯文本显示');
-                window.marked = {
-                    setOptions: function() {},
-                    parse: function(text) { return text.replace(/\n/g, '<br>'); }
-                };
-            }
-            onInventoryModeChange();
-        });
-    </script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .header {
-            text-align: center;
-            color: white;
-            margin-bottom: 30px;
-        }
-
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
-        }
-
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-        }
-
-        .main-content {
-            display: grid;
-            grid-template-columns: 400px 1fr;
-            gap: 20px;
-        }
-
-        .panel {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-            overflow: hidden;
-        }
-
-        .panel-header {
-            padding: 16px 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            font-weight: 600;
-            font-size: 1.1rem;
-        }
-
-        .panel-body {
-            padding: 20px;
-        }
-
-        .agent-tabs {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        .agent-tab {
-            padding: 14px 20px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 1rem;
-        }
-
-        .agent-tab:hover {
-            border-color: #667eea;
-            background: #f8f9ff;
-        }
-
-        .agent-tab.active {
-            border-color: #667eea;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-
-        .agent-tab .icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.3rem;
-            background: rgba(102, 126, 234, 0.1);
-        }
-
-        .agent-tab.active .icon {
-            background: rgba(255,255,255,0.2);
-        }
-
-        .param-group {
-            margin-bottom: 16px;
-        }
-
-        .param-label {
-            display: block;
-            font-size: 0.85rem;
-            color: #666;
-            margin-bottom: 6px;
-            font-weight: 500;
-        }
-
-        .param-input {
-            width: 100%;
-            padding: 12px 14px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 0.95rem;
-            transition: border-color 0.3s ease;
-            background: #fafafa;
-        }
-
-        .param-input:focus {
-            outline: none;
-            border-color: #667eea;
-            background: white;
-        }
-
-        .param-hint {
-            font-size: 0.75rem;
-            color: #999;
-            margin-top: 4px;
-        }
-
-        .btn {
-            width: 100%;
-            padding: 14px 20px;
-            border: none;
-            border-radius: 10px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-primary:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .btn-secondary {
-            background: #f0f0f0;
-            color: #666;
-        }
-
-        .btn-secondary:hover {
-            background: #e0e0e0;
-        }
-
-        /* 响应区域 */
-        .response-area {
-            height: 600px;
-            overflow-y: auto;
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 20px;
-            font-size: 0.95rem;
-            line-height: 1.6;
-            color: #333;
-            border: 2px solid #e0e0e0;
-        }
-
-        .response-area.loading {
-            background: linear-gradient(90deg, #f8f9fa 25%, #e9ecef 50%, #f8f9fa 75%);
-            background-size: 200% 100%;
-            animation: loading 1.5s infinite;
-        }
-
-        @keyframes loading {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
-
-        /* 消息类型区分 */
-        .message {
-            margin-bottom: 16px;
-            padding: 12px 16px;
-            border-radius: 8px;
-            word-break: break-word;
-        }
-
-        .message-step {
-            background: #e8f4ff;
-            border-left: 4px solid #2196f3;
-            color: #1565c0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        .message-thinking {
-            background: #fff8e1;
-            border-left: 4px solid #ffc107;
-            color: #795548;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-style: italic;
-        }
-
-        .message-content {
-            background: #f1f8e9;
-            border-left: 4px solid #4caf50;
-            color: #2e7d32;
-        }
-
-        .message-content .markdown-body {
-            color: #2e7d32;
-        }
-
-        .message-error {
-            background: #ffebee;
-            border-left: 4px solid #f44336;
-            color: #c62828;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        .message-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-            font-size: 0.8rem;
-            opacity: 0.7;
-        }
-
-        .message-time {
-            font-size: 0.75rem;
-            color: #999;
-        }
-
-        .response-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid #e0e0e0;
-        }
-
-        .response-title {
-            font-weight: 600;
-            color: #333;
-            font-size: 1.1rem;
-        }
-
-        .toggle-container {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.85rem;
-            color: #666;
-        }
-
-        .toggle-switch {
-            position: relative;
-            width: 44px;
-            height: 24px;
-        }
-
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: 0.3s;
-            border-radius: 24px;
-        }
-
-        .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: 0.3s;
-            border-radius: 50%;
-        }
-
-        input:checked + .toggle-slider {
-            background-color: #667eea;
-        }
-
-        input:checked + .toggle-slider:before {
-            transform: translateX(20px);
-        }
-
-        .radio-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .radio-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            padding: 8px 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-
-        .radio-label:hover {
-            border-color: #667eea;
-            background: #f8f9ff;
-        }
-
-        .radio-label.selected {
-            border-color: #667eea;
-            background: linear-gradient(135deg, #f0f4ff 0%, #f0f4ff 100%);
-        }
-
-        .radio-label input[type="radio"] {
-            width: 18px;
-            height: 18px;
-            accent-color: #667eea;
-        }
-
-        /* Markdown 样式 */
-        .markdown-body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 0.95rem;
-            line-height: 1.7;
-        }
-
-        .markdown-body h1, .markdown-body h2, .markdown-body h3, 
-        .markdown-body h4, .markdown-body h5, .markdown-body h6 {
-            margin-top: 1em;
-            margin-bottom: 0.5em;
-            font-weight: 600;
-            color: inherit;
-        }
-
-        .markdown-body h1 { font-size: 1.5em; }
-        .markdown-body h2 { font-size: 1.3em; }
-        .markdown-body h3 { font-size: 1.1em; }
-
-        .markdown-body p {
-            margin-bottom: 0.8em;
-        }
-
-        .markdown-body ul, .markdown-body ol {
-            margin-left: 1.5em;
-            margin-bottom: 0.8em;
-        }
-
-        .markdown-body li {
-            margin-bottom: 0.3em;
-        }
-
-        .markdown-body code {
-            background: rgba(0,0,0,0.06);
-            padding: 0.2em 0.4em;
-            border-radius: 4px;
-            font-family: 'Consolas', 'Monaco', monospace;
-            font-size: 0.9em;
-        }
-
-        .markdown-body pre {
-            background: rgba(0,0,0,0.06);
-            padding: 1em;
-            border-radius: 8px;
-            overflow-x: auto;
-            margin-bottom: 0.8em;
-        }
-
-        .markdown-body pre code {
-            background: none;
-            padding: 0;
-        }
-
-        .markdown-body table {
-            border-collapse: collapse;
-            width: 100%;
-            margin-bottom: 0.8em;
-        }
-
-        .markdown-body th, .markdown-body td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: left;
-        }
-
-        .markdown-body th {
-            background: rgba(0,0,0,0.05);
-            font-weight: 600;
-        }
-
-        .markdown-body blockquote {
-            border-left: 4px solid #ccc;
-            padding-left: 1em;
-            margin-left: 0;
-            color: #666;
-            margin-bottom: 0.8em;
-        }
-
-        .markdown-body hr {
-            border: none;
-            border-top: 1px solid #ddd;
-            margin: 1em 0;
-        }
-
-        .markdown-body strong {
-            font-weight: 600;
-        }
-
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #a1a1a1;
-        }
-
-        @media (max-width: 900px) {
-            .main-content {
-                grid-template-columns: 1fr;
-            }
-            
-            .header h1 {
-                font-size: 1.8rem;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>采购智能助手</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@5/marked.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --primary: #2563eb;
+    --primary-light: #3b82f6;
+    --primary-bg: #eff6ff;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --red-400: #f87171;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 6px rgba(0,0,0,0.07), 0 10px 15px rgba(0,0,0,0.1);
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+    background: var(--gray-100);
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: var(--gray-800);
+  }
+
+  .app {
+    width: 100%;
+    max-width: 800px;
+    height: 100vh;
+    max-height: 800px;
+    background: #fff;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin: 16px;
+  }
+
+  @media (max-width: 640px) {
+    .app { max-height: 100vh; margin: 0; border-radius: 0; }
+  }
+
+  /* ===== 工具栏 ===== */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--gray-200);
+    background: #fff;
+    flex-shrink: 0;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--gray-900);
+  }
+
+  .toolbar-title .badge {
+    font-size: 10px;
+    background: var(--primary-bg);
+    color: var(--primary);
+    padding: 2px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .stream-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--gray-600);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .stream-toggle input[type="checkbox"] {
+    appearance: none;
+    width: 32px;
+    height: 18px;
+    background: var(--gray-300);
+    border-radius: 9px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+
+  .stream-toggle input[type="checkbox"]::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .stream-toggle input[type="checkbox"]:checked { background: var(--primary); }
+  .stream-toggle input[type="checkbox"]:checked::after { transform: translateX(14px); }
+
+  .btn-clear, .btn-tools {
+    background: none;
+    border: 1px solid var(--gray-200);
+    padding: 5px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--gray-600);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn-clear:hover { background: var(--gray-50); color: var(--red-400); border-color: var(--red-400); }
+  .btn-tools:hover { background: var(--gray-50); color: var(--primary); border-color: var(--primary); }
+  .btn-tools.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+
+  /* ===== 工具面板 ===== */
+  .tools-panel {
+    background: var(--gray-50);
+    border-bottom: 1px solid var(--gray-200);
+    padding: 0 16px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, padding 0.3s ease;
+    flex-shrink: 0;
+  }
+
+  .tools-panel.open {
+    max-height: 300px;
+    padding: 12px 16px;
+    overflow-y: auto;
+  }
+
+  .tools-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-500);
+    margin-bottom: 8px;
+  }
+
+  .tools-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  @media (max-width: 500px) {
+    .tools-grid { grid-template-columns: 1fr; }
+  }
+
+  .tool-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    font-size: 12px;
+  }
+
+  .tool-chip .tool-name {
+    font-weight: 600;
+    color: var(--primary);
+    font-family: monospace;
+    font-size: 11px;
+  }
+
+  .tool-chip .tool-desc {
+    color: var(--gray-500);
+    font-size: 11px;
+    line-height: 1.4;
+    word-break: break-all;
+  }
+
+  /* ===== 消息区域 ===== */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: var(--gray-50);
+  }
+
+  .messages:empty {
+    justify-content: center;
+    align-items: center;
+  }
+
+  .messages:empty::after {
+    content: '发送消息开始对话';
+    color: var(--gray-400);
+    font-size: 14px;
+  }
+
+  .msg {
+    display: flex;
+    gap: 10px;
+    max-width: 88%;
+    animation: msgIn 0.25s ease-out;
+  }
+
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.assistant { align-self: flex-start; }
+
+  .msg-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .msg.user .msg-avatar { background: var(--primary); color: #fff; }
+  .msg.assistant .msg-avatar { background: #fff; color: var(--primary); border: 1px solid var(--gray-200); }
+
+  /* 助手消息容器：上下结构 */
+  .msg-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .msg-body {
+    background: #fff;
+    padding: 10px 14px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    line-height: 1.65;
+    font-size: 14px;
+    word-break: break-word;
+  }
+
+  .msg.user .msg-body {
+    background: var(--primary);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg.assistant .msg-body {
+    border-bottom-left-radius: 4px;
+  }
+
+  /* Markdown 样式 */
+  .msg-body h1, .msg-body h2, .msg-body h3 { margin: 10px 0 6px; font-weight: 600; }
+  .msg-body h1 { font-size: 17px; }
+  .msg-body h2 { font-size: 15px; }
+  .msg-body h3 { font-size: 14px; }
+  .msg-body p { margin-bottom: 6px; }
+  .msg-body p:last-child { margin-bottom: 0; }
+  .msg-body ul, .msg-body ol { padding-left: 20px; margin: 4px 0; }
+  .msg-body li { margin: 2px 0; }
+  .msg-body code {
+    background: var(--gray-100);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .msg-body pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 12px;
+    border-radius: var(--radius);
+    overflow-x: auto;
+    margin: 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .msg-body pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+  }
+  .msg-body strong { font-weight: 600; }
+  .msg-body a { color: var(--primary); text-decoration: none; }
+  .msg-body a:hover { text-decoration: underline; }
+
+  /* 加载动画 */
+  .msg-loading .msg-body {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 18px;
+  }
+
+  .msg-loading .dot {
+    width: 8px;
+    height: 8px;
+    background: var(--gray-400);
+    border-radius: 50%;
+    animation: bounce 1.4s infinite ease-in-out both;
+  }
+
+  .msg-loading .dot:nth-child(1) { animation-delay: -0.32s; }
+  .msg-loading .dot:nth-child(2) { animation-delay: -0.16s; }
+  .msg-loading .dot:nth-child(3) { animation-delay: 0s; }
+
+  @keyframes bounce {
+    0%, 80%, 100% { transform: scale(0.6); }
+    40% { transform: scale(1); }
+  }
+
+  /* ===== 思考过程（展开/收起） ===== */
+  .thinking-box {
+    background: var(--gray-50);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .thinking-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--gray-500);
+    user-select: none;
+    transition: background 0.15s;
+  }
+
+  .thinking-header:hover { background: var(--gray-100); }
+  .thinking-header .label { display: flex; align-items: center; gap: 4px; }
+  .thinking-header .arrow { transition: transform 0.2s; font-size: 10px; }
+  .thinking-header .arrow.open { transform: rotate(90deg); }
+
+  .thinking-content {
+    padding: 0 10px 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--gray-600);
+    display: none;
+  }
+
+  .thinking-content.open { display: block; }
+
+  .thinking-content .thought-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 2px 0;
+  }
+
+  .thinking-content .thought-item .tag {
+    font-size: 11px;
+    background: var(--gray-200);
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    color: var(--gray-600);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .thinking-content .thought-item .tag.intent { background: var(--primary-bg); color: var(--primary); }
+  .thinking-content .thought-item .tag.confidence { background: #ecfdf5; color: #059669; }
+  .thinking-content .thought-item .tag.error { background: #fef2f2; color: #dc2626; }
+
+  /* ===== 输入区域 ===== */
+  .input-area {
+    padding: 12px 16px;
+    border-top: 1px solid var(--gray-200);
+    background: #fff;
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .input-area textarea {
+    flex: 1;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+    outline: none;
+    line-height: 1.5;
+    max-height: 100px;
+    transition: border-color 0.15s;
+  }
+
+  .input-area textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  }
+
+  .input-area textarea::placeholder { color: var(--gray-400); }
+
+  .btn-send {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0 16px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex-shrink: 0;
+    min-width: 64px;
+  }
+
+  .btn-send:hover { background: var(--primary-light); }
+  .btn-send:active { transform: scale(0.97); }
+  .btn-send:disabled { background: var(--gray-300); cursor: not-allowed; transform: none; }
+
+  .msg.error .msg-body {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+  }
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>⚡ 采购管理智能体</h1>
-            <p>流式交互分析 - 实时获取智能体分析结果</p>
-        </div>
 
-        <div class="main-content">
-            <div class="panel">
-                <div class="panel-header">
-                    🎯 智能体选择与参数配置
-                </div>
-                <div class="panel-body">
-                    <div class="agent-tabs">
-                        <div class="agent-tab active" data-agent="allocation">
-                            <span class="icon">📦</span>
-                            <span>智能调配</span>
-                        </div>
-                        <div class="agent-tab" data-agent="inventory">
-                            <span class="icon">📊</span>
-                            <span>库存分析</span>
-                        </div>
-                        <div class="agent-tab" data-agent="supplier">
-                            <span class="icon">🤝</span>
-                            <span>供应商匹配</span>
-                        </div>
-                    </div>
-
-                    <div id="params-form">
-                        <div id="allocation-params" class="params-section">
-                            <div class="param-group">
-                                <label class="param-label">调配策略</label>
-                                <input type="text" class="param-input" id="allocation-strategy" placeholder="time/cost/stock/emerg" value="time">
-                                <div class="param-hint">默认: time（时效优先）</div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">仓库编码</label>
-                                <input type="text" class="param-input" id="allocation-warehouse" placeholder="如: MGA0" value="MGA0">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">物料编码（逗号分隔）</label>
-                                <input type="text" class="param-input" id="allocation-materials" placeholder="如: 500004650,500004651" value="500004650">
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">计划类型</label>
-                                <input type="text" class="param-input" id="allocation-plan-type" placeholder="如: 月度计划" value="">
-                            </div>
-                        </div>
-
-                        <div id="inventory-params" class="params-section" style="display: none;">
-                            <div class="param-group">
-                                <label class="param-label">分析模式选择</label>
-                                <div style="display: flex; gap: 12px;">
-                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                        <input type="radio" name="inventory-mode" value="water_level" checked onchange="onInventoryModeChange()">
-                                        <span style="color: #667eea; font-weight: bold;">水位线模式</span>
-                                    </label>
-                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                        <input type="radio" name="inventory-mode" value="replenishment" onchange="onInventoryModeChange()">
-                                        <span style="color: #e67e22; font-weight: bold;">补库计划模式</span>
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">分析模式说明</label>
-                                <div style="padding: 10px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffc107; font-size: 0.82rem; color: #795548; line-height: 1.5;">
-                                    <b>水位线模式</b>：填写仓库编码，AI分析历史出库生成水位线<br>
-                                    <b>补库计划模式</b>：填写物资分类编码，确定性算法+LLM总结
-                                </div>
-                            </div>
-                            <div id="inventory-water-group">
-                            <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
-                                <label class="param-label" style="color: #667eea;">🔹 水位线模式参数</label>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">仓库编码</label>
-                                <input type="text" class="param-input" id="inventory-warehouse" placeholder="如: MGA0，留空则查询所有仓库" value="MGA0">
-                                <div class="param-hint">示例: MGA0（国网湖南物资公司张家界周转库）</div>
-                            </div>
-                            </div>
-                            <div id="inventory-replenish-group">
-                            <div class="param-group" style="border-top: 1px dashed #ddd; padding-top: 14px; margin-top: 4px;">
-                                <label class="param-label" style="color: #e67e22;">🔸 补库计划模式参数</label>
-                                <div class="param-hint" style="margin-bottom: 8px;">填写以下分类编码将自动进入补库计划模式</div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">物资大类编码</label>
-                                <input type="text" class="param-input" id="inventory-major" placeholder="如: 03，留空=全部" value="">
-                                <div class="param-hint">示例: 03（电缆及附件），留空则忽略大类筛选</div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">物资中类编码</label>
-                                <input type="text" class="param-input" id="inventory-medium" placeholder="如: 0302，留空=全部" value="">
-                                <div class="param-hint">示例: 0302（电力电缆），留空则忽略中类筛选</div>
-                            </div>
-                            <div class="param-group">
-                                <label class="param-label">物资小类编码</label>
-                                <input type="text" class="param-input" id="inventory-small" placeholder="如: 030201，留空=全部" value="">
-                                <div class="param-hint">示例: 030201（10kV电力电缆），留空则忽略小类筛选</div>
-                            </div>
-                            </div>
-                        </div>
-
-                        <div id="supplier-params" class="params-section" style="display: none;">
-                            <div class="param-group">
-                                <label class="param-label">计划数据</label>
-                                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; border: 2px solid #e0e0e0; font-size: 0.9rem; color: #667eea;">
-                                    📊 系统将自动从数据库获取补货计划数据
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="display: flex; gap: 10px; margin-top: 20px;">
-                        <button class="btn btn-primary" id="btn-submit">
-                            <span>🚀</span>
-                            <span>开始分析</span>
-                        </button>
-                        <button class="btn btn-secondary" id="btn-stop" style="display: none; background: #dc3545; color: white;">
-                            <span>⏹️</span>
-                            <span>终止</span>
-                        </button>
-                        <button class="btn btn-secondary" id="btn-clear">
-                            <span>🗑️</span>
-                            <span>清空</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="panel">
-                <div class="panel-header">
-                    📝 智能体分析结果
-                </div>
-                <div class="panel-body">
-                    <div class="response-header">
-                        <span class="response-title" id="response-title">等待分析...</span>
-                        <div style="display: flex; gap: 16px; align-items: center;">
-                            <div class="toggle-container">
-                                <span>显示思考过程</span>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="toggle-thinking" checked>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="toggle-container">
-                                <span>Mock 模式</span>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="toggle-mock">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="response-area" id="response-area">
-                        <div class="message message-step">请选择智能体并点击"开始分析"按钮，智能体将实时返回分析结果...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<div class="app">
+  <!-- 工具栏 -->
+  <div class="toolbar">
+    <div class="toolbar-title">
+      <span>🤖 采购智能助手</span>
+      <span class="badge">LangChain</span>
     </div>
+    <div class="toolbar-actions">
+      <label class="stream-toggle">
+        <span>流式</span>
+        <input type="checkbox" id="streamToggle" checked>
+      </label>
+      <button class="btn-tools" id="toolsToggleBtn">📋 工具</button>
+      <button class="btn-clear" id="clearBtn" title="清除历史记录">✕ 清除</button>
+    </div>
+  </div>
 
-    <script>
-        let currentAgent = 'allocation';
-        let isStreaming = false;
-        let showThinking = true;
-        let useMock = false;
-        let lastMessageDiv = null;
-        let pendingContent = '';
-        let parseTimeout = null;
-        let currentSessionId = null;
-        let abortController = null;
+  <!-- 工具面板 -->
+  <div class="tools-panel" id="toolsPanel">
+    <div class="tools-panel-title">🛠️ 可用工具</div>
+    <div class="tools-grid" id="toolsGrid"></div>
+  </div>
 
-        // 配置marked库
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            pedantic: false,
-            sanitize: false,
-            smartLists: true,
-            smartypants: true
-        });
+  <!-- 消息区域 -->
+  <div class="messages" id="messages"></div>
 
-        
+  <!-- 输入区域 -->
+  <div class="input-area">
+    <textarea id="inputBox" rows="1" placeholder="输入你的消息..." 
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+    <button class="btn-send" id="sendBtn" onclick="sendMessage()">发送</button>
+  </div>
+</div>
 
-        document.querySelectorAll('.agent-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                if (isStreaming) return;
-                
-                document.querySelectorAll('.agent-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                currentAgent = tab.dataset.agent;
-                
-                document.querySelectorAll('.params-section').forEach(section => {
-                    section.style.display = 'none';
-                });
-                document.getElementById(`${currentAgent}-params`).style.display = 'block';
-                
-                const titles = {
-                    allocation: '智能调配分析',
-                    inventory: '库存分析',
-                    supplier: '供应商匹配'
-                };
-                document.getElementById('response-title').textContent = '等待分析...';
-            });
-        });
+<script>
+// ============================================
+// 状态管理
+// ============================================
+const state = {
+  history: [],
+  isStreaming: true,
+  isLoading: false,
+  loadingMsgEl: null,
+  abortController: null,
+};
 
-        document.getElementById('btn-submit').addEventListener('click', async () => {
-            if (isStreaming) return;
+const messagesEl = document.getElementById('messages');
+const inputBox = document.getElementById('inputBox');
+const sendBtn = document.getElementById('sendBtn');
+const clearBtn = document.getElementById('clearBtn');
+const streamToggle = document.getElementById('streamToggle');
+const toolsToggleBtn = document.getElementById('toolsToggleBtn');
+const toolsPanel = document.getElementById('toolsPanel');
+const toolsGrid = document.getElementById('toolsGrid');
 
-            const btn = document.getElementById('btn-submit');
-            const stopBtn = document.getElementById('btn-stop');
-            const responseArea = document.getElementById('response-area');
-            showThinking = document.getElementById('toggle-thinking').checked;
-            useMock = document.getElementById('toggle-mock').checked;
+// 初始化
+streamToggle.addEventListener('change', () => { state.isStreaming = streamToggle.checked; });
+clearBtn.addEventListener('click', clearHistory);
 
-            // 重置会话状态
-            currentSessionId = null;
-            abortController = new AbortController();
+// 工具面板切换
+let toolsOpen = false;
+toolsToggleBtn.addEventListener('click', async () => {
+  toolsOpen = !toolsOpen;
+  toolsPanel.classList.toggle('open', toolsOpen);
+  toolsToggleBtn.classList.toggle('active', toolsOpen);
+  if (toolsOpen && toolsGrid.children.length === 0) {
+    await loadTools();
+  }
+});
 
-            isStreaming = true;
-            btn.style.display = 'none';
-            stopBtn.style.display = 'flex';
+// ===== 加载工具列表 =====
+async function loadTools() {
+  try {
+    const resp = await fetch('/api/tools');
+    const data = await resp.json();
+    toolsGrid.innerHTML = '';
+    for (const t of data.tools) {
+      const chip = document.createElement('div');
+      chip.className = 'tool-chip';
+      chip.innerHTML = `<span class="tool-name">${escapeHtml(t.name)}</span><span class="tool-desc">${escapeHtml(t.description)}</span>`;
+      toolsGrid.appendChild(chip);
+    }
+  } catch (e) {
+    toolsGrid.innerHTML = '<div style="color:var(--red-400);font-size:12px;">加载失败</div>';
+  }
+}
 
-            responseArea.innerHTML = '';
-            responseArea.classList.add('loading');
-            lastMessageDiv = null;
+// ===== 辅助 =====
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
-            const titles = {
-                allocation: '智能调配分析',
-                inventory: '库存分析',
-                supplier: '供应商匹配'
-            };
-            document.getElementById('response-title').textContent = titles[currentAgent];
+function autoResize() {
+  inputBox.style.height = 'auto';
+  inputBox.style.height = Math.min(inputBox.scrollHeight, 100) + 'px';
+}
+inputBox.addEventListener('input', autoResize);
 
-            try {
-                const url = `/api/${currentAgent}/${currentAgent === 'allocation' ? 'match' : currentAgent === 'inventory' ? 'analyze' : 'match'}/stream`;
-                const data = buildRequestData();
+// ===== 消息渲染 =====
+function addMessage(role, content, thinkingData = null) {
+  const div = document.createElement('div');
+  div.className = `msg ${role === 'user' ? 'user' : 'assistant'}`;
 
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(data),
-                    signal: abortController.signal
-                });
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? '我' : '🤖';
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+  div.appendChild(avatar);
 
-                // 直接从响应头获取会话ID（推荐方式）
-                currentSessionId = response.headers.get('X-Session-Id');
-                console.log('[Session] 从响应头获取会话ID:', currentSessionId);
+  if (role === 'assistant') {
+    // 助手消息：上下结构
+    const contentWrap = document.createElement('div');
+    contentWrap.className = 'msg-content';
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
+    // 思考过程（在上方）
+    if (thinkingData) {
+      contentWrap.appendChild(createThinkingBox(thinkingData));
+    }
 
-                responseArea.classList.remove('loading');
+    // 回复正文（在下方）- Markdown 渲染
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    if (content) {
+      body.innerHTML = marked.parse(content);
+    }
+    contentWrap.appendChild(body);
+    div.appendChild(contentWrap);
+  } else {
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    body.textContent = content;
+    div.appendChild(body);
+  }
 
-                let buffer = '';
+  messagesEl.appendChild(div);
+  scrollToBottom();
+  return div;
+}
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+function addError(content) {
+  const div = document.createElement('div');
+  div.className = 'msg error';
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.textContent = content;
+  div.appendChild(body);
+  messagesEl.appendChild(div);
+  scrollToBottom();
+}
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    processStreamChunk(chunk);
-                }
+function showLoading() {
+  hideLoading();
+  const div = document.createElement('div');
+  div.className = 'msg assistant msg-loading';
+  div.id = 'loadingMsg';
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '🤖';
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    body.appendChild(dot);
+  }
+  div.appendChild(avatar);
+  div.appendChild(body);
+  messagesEl.appendChild(div);
+  scrollToBottom();
+  state.loadingMsgEl = div;
+}
 
-                // 流结束后，强制进行一次最终解析
-                if (parseTimeout) {
-                    clearTimeout(parseTimeout);
-                }
-                if (lastMessageDiv && lastMessageDiv.classList.contains('message-content') && pendingContent) {
-                    const contentDiv = lastMessageDiv.querySelector('.markdown-body');
-                    if (contentDiv) {
-                        try {
-                            contentDiv.innerHTML = marked.parse(pendingContent);
-                        } catch (e) {
-                            console.error('Final markdown parse error:', e);
-                        }
-                    }
-                }
+function hideLoading() {
+  if (state.loadingMsgEl) {
+    state.loadingMsgEl.remove();
+    state.loadingMsgEl = null;
+  }
+}
 
-            } catch (error) {
-                if (error.name === 'AbortError') {
-                    addMessage('error', '❌ 分析已终止');
-                } else {
-                    addMessage('error', `❌ 分析失败: ${error.message}`);
-                }
-            } finally {
-                isStreaming = false;
-                btn.style.display = 'flex';
-                stopBtn.style.display = 'none';
-                currentSessionId = null;
-                abortController = null;
-            }
-        });
+function scrollToBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
 
-        // 终止按钮事件
-        document.getElementById('btn-stop').addEventListener('click', async () => {
-            if (!isStreaming) return;
+// ===== 思考过程 =====
+function createThinkingBox(data) {
+  const box = document.createElement('div');
+  box.className = 'thinking-box';
 
-            const stopBtn = document.getElementById('btn-stop');
-            stopBtn.disabled = true;
-            stopBtn.innerHTML = '<span>⏳</span><span>终止中...</span>';
+  const header = document.createElement('div');
+  header.className = 'thinking-header';
+  header.innerHTML = `<span class="label">🧠 思考过程</span><span class="arrow open">▶</span>`;
 
-            // 1. 先尝试通过API发送终止信号
-            if (currentSessionId) {
-                try {
-                    const response = await fetch(`/api/session/${currentSessionId}/stop`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    if (response.ok) {
-                        console.log('[Stop] 终止信号已发送:', currentSessionId);
-                    }
-                } catch (e) {
-                    console.error('[Stop] 发送终止信号失败:', e);
-                }
-            }
+  const content = document.createElement('div');
+  content.className = 'thinking-content open';
 
-            // 2. 取消fetch请求
-            if (abortController) {
-                abortController.abort();
-            }
+  if (data.intent) {
+    const item = document.createElement('div');
+    item.className = 'thought-item';
+    item.innerHTML = `<span class="tag intent">意图</span> ${escapeHtml(data.intent)}`;
+    content.appendChild(item);
+  }
+  if (data.confidence !== undefined && data.confidence !== null) {
+    const item = document.createElement('div');
+    item.className = 'thought-item';
+    item.innerHTML = `<span class="tag confidence">置信度</span> ${(data.confidence * 100).toFixed(0)}%`;
+    content.appendChild(item);
+  }
+  if (data.reasoning) {
+    const item = document.createElement('div');
+    item.className = 'thought-item';
+    item.innerHTML = `<span class="tag" style="flex-shrink:0;">推理</span> ${escapeHtml(data.reasoning)}`;
+    content.appendChild(item);
+  }
 
-            stopBtn.disabled = false;
-            stopBtn.innerHTML = '<span>⏹️</span><span>终止</span>';
-        });
+  header.addEventListener('click', () => {
+    const isOpen = content.classList.toggle('open');
+    header.querySelector('.arrow').classList.toggle('open', isOpen);
+  });
 
-        function processStreamChunk(chunk) {
-            // 检查是否是步骤信息（以特定emoji开头）
-            const stepPrefixes = ['🔍', '✅', '📋', '📦', '🤝', '🤖', '📊', '━━━━━━━━━━━━━━━━'];
-            const isStep = stepPrefixes.some(prefix => chunk.startsWith(prefix));
-            
-            if (isStep) {
-                addMessage('step', chunk);
-            } else if (chunk.startsWith('❌')) {
-                addMessage('error', chunk);
-            } else {
-                // LLM返回的内容，直接追加到content
-                appendToContent(chunk);
-            }
+  box.appendChild(header);
+  box.appendChild(content);
+  return box;
+}
+
+// ===== 发送消息 =====
+async function sendMessage() {
+  const text = inputBox.value.trim();
+  if (!text || state.isLoading) return;
+
+  inputBox.value = '';
+  autoResize();
+
+  addMessage('user', text);
+  state.history.push({ role: 'user', content: text });
+
+  showLoading();
+  state.isLoading = true;
+  sendBtn.disabled = true;
+
+  try {
+    if (state.isStreaming) {
+      await sendStream(text);
+    } else {
+      await sendNonStream(text);
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      hideLoading();
+      addError(`请求失败: ${err.message}`);
+    }
+  } finally {
+    hideLoading();
+    state.isLoading = false;
+    sendBtn.disabled = false;
+  }
+}
+
+// ===== 非流式 =====
+async function sendNonStream(text) {
+  const resp = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text, history: state.history.slice(0, -1) }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  hideLoading();
+
+  const thinkingData = { intent: data.intent, confidence: data.confidence, reasoning: data.reasoning };
+  if (data.error) {
+    addError(data.error);
+    state.history.push({ role: 'assistant', content: data.error });
+  } else {
+    addMessage('assistant', data.result, thinkingData);
+    state.history.push({ role: 'assistant', content: data.result });
+  }
+}
+
+// ===== 流式 =====
+async function sendStream(text) {
+  state.abortController = new AbortController();
+  const resp = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text, history: state.history.slice(0, -1) }),
+    signal: state.abortController.signal,
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+  hideLoading();
+
+  // 创建空助手消息（上下结构容器）
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'msg assistant';
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '🤖';
+  msgDiv.appendChild(avatar);
+  const contentWrap = document.createElement('div');
+  contentWrap.className = 'msg-content';
+  msgDiv.appendChild(contentWrap);
+  messagesEl.appendChild(msgDiv);
+
+  let bodyEl = null;
+  let content = '';
+  let thinkingData = null;
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.startsWith('event: ')) {
+        const eventType = line.slice(7).trim();
+        i++;
+        if (i < lines.length && lines[i].startsWith('data: ')) {
+          try {
+            const data = JSON.parse(lines[i].slice(6));
+            handleEvent(eventType, data);
+          } catch (e) {}
         }
+      } else if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.content !== undefined) {
+            content = data.content;
+            if (bodyEl) bodyEl.innerHTML = marked.parse(content);
+          }
+        } catch (e) {}
+      }
+      i++;
+    }
+  }
 
-        function appendToContent(text) {
-            if (!lastMessageDiv || !lastMessageDiv.classList.contains('message-content')) {
-                lastMessageDiv = null;
-                addMessage('content', text);
-                return;
-            }
-            
-            const originalSpan = lastMessageDiv.querySelector('.original-content');
-            const contentDiv = lastMessageDiv.querySelector('.markdown-body');
-            
-            if (!originalSpan || !contentDiv) {
-                addMessage('content', text);
-                return;
-            }
-            
-            // 累积内容
-            pendingContent += text;
-            originalSpan.textContent = pendingContent;
-            
-            // 立即更新显示（打字机效果）
-            try {
-                contentDiv.innerHTML = marked.parse(pendingContent);
-            } catch (e) {
-                console.error('Markdown parse error:', e);
-                contentDiv.textContent = pendingContent;
-            }
-            scrollToBottom();
+  function handleEvent(event, data) {
+    switch (event) {
+      case 'thinking_result':
+        thinkingData = { intent: data.intent, confidence: data.confidence, reasoning: data.reasoning };
+        // 思考框插入到 contentWrap 顶部
+        const tb = createThinkingBox(thinkingData);
+        contentWrap.prepend(tb);
+        break;
+
+      case 'tool_result':
+        content = data.content || '';
+        if (!bodyEl) {
+          bodyEl = document.createElement('div');
+          bodyEl.className = 'msg-body';
+          contentWrap.appendChild(bodyEl);
         }
+        bodyEl.innerHTML = marked.parse(content);
+        scrollToBottom();
+        break;
 
-        function addMessage(type, content) {
-            const responseArea = document.getElementById('response-area');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message message-${type}`;
-            
-            const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            
-            const typeLabels = {
-                step: '📋 步骤信息',
-                thinking: '💭 思考过程',
-                content: '📝 分析结果',
-                error: '❌ 错误'
-            };
-            
-            let contentHtml;
-            if (type === 'content') {
-                // 重置累积内容
-                pendingContent = content;
-                contentHtml = `<span style="display: none;" class="original-content">${content}</span><div class="markdown-body">${marked.parse(content)}</div>`;
-            } else {
-                contentHtml = `<pre style="white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit;">${escapeHtml(content)}</pre>`;
-            }
-            
-            messageDiv.innerHTML = `
-                <div class="message-header">
-                    <span>${typeLabels[type]}</span>
-                    <span class="message-time">${time}</span>
-                </div>
-                ${contentHtml}
-            `;
-            responseArea.appendChild(messageDiv);
-            
-            lastMessageDiv = messageDiv;
-            
-            scrollToBottom();
+      case 'error':
+        if (!bodyEl) {
+          bodyEl = document.createElement('div');
+          bodyEl.className = 'msg-body';
+          contentWrap.appendChild(bodyEl);
         }
+        bodyEl.innerHTML = `⚠️ ${escapeHtml(data.content)}`;
+        bodyEl.style.color = '#dc2626';
+        break;
 
-        function scrollToBottom() {
-            const responseArea = document.getElementById('response-area');
-            responseArea.scrollTo({
-                top: responseArea.scrollHeight,
-                behavior: 'smooth'
-            });
+      case 'done':
+        if (content) {
+          state.history.push({ role: 'assistant', content });
         }
+        break;
+    }
+  }
+}
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+// ===== 清除 =====
+function clearHistory() {
+  if (state.isLoading) {
+    state.abortController?.abort();
+    state.isLoading = false;
+    sendBtn.disabled = false;
+    hideLoading();
+  }
+  state.history = [];
+  messagesEl.innerHTML = '';
+  inputBox.focus();
+}
+</script>
 
-        document.getElementById('btn-clear').addEventListener('click', () => {
-            if (isStreaming) return;
-            
-            document.getElementById('response-area').innerHTML = '<div class="message message-step">请选择智能体并点击"开始分析"按钮，智能体将实时返回分析结果...</div>';
-            document.getElementById('response-title').textContent = '等待分析...';
-            lastMessageDiv = null;
-        });
-
-        function buildRequestData() {
-            switch (currentAgent) {
-                case 'allocation':
-                    return {
-                        strategy: document.getElementById('allocation-strategy').value || 'time',
-                        warehouseCode: document.getElementById('allocation-warehouse').value || '',
-                        sourceType: '',
-                        projectUnit: '',
-                        demandStartDate: '',
-                        demandEndDate: '',
-                        planType: document.getElementById('allocation-plan-type').value || '',
-                        materialCodes: parseCommaList(document.getElementById('allocation-materials').value),
-                        mock: useMock
-                    };
-                case 'inventory': {
-                    const mode = document.querySelector('input[name="inventory-mode"]:checked').value;
-                    const body = { mock: useMock };
-                    if (mode === 'water_level') {
-                        body.warehouseCode = document.getElementById('inventory-warehouse').value || '';
-                        body.majorCategory = '';
-                        body.mediumCategory = '';
-                        body.smallCategory = '';
-                    } else {
-                        body.majorCategory = document.getElementById('inventory-major').value || '';
-                        body.mediumCategory = document.getElementById('inventory-medium').value || '';
-                        body.smallCategory = document.getElementById('inventory-small').value || '';
-                        // 不传 warehouseCode
-                    }
-                    return body;
-                }
-                case 'supplier':
-                    return {
-                        mock: useMock
-                    };
-                default:
-                    return {};
-            }
-        }
-
-        function parseCommaList(text) {
-            if (!text || !text.trim()) return null;
-            return text.split(',').map(item => item.trim()).filter(item => item);
-        }
-
-        function onInventoryModeChange() {
-            const mode = document.querySelector('input[name="inventory-mode"]:checked').value;
-            const waterGroup = document.getElementById('inventory-water-group');
-            const replenishGroup = document.getElementById('inventory-replenish-group');
-            if (mode === 'water_level') {
-                if (waterGroup) waterGroup.style.display = '';
-                if (replenishGroup) replenishGroup.style.display = 'none';
-            } else {
-                if (waterGroup) waterGroup.style.display = 'none';
-                if (replenishGroup) replenishGroup.style.display = '';
-            }
-        }
-    </script>
 </body>
 </html>

@@ -43,7 +43,7 @@ class LLMConfig:
         self.providers: Dict[str, LLMProviderConfig] = {
             "deepseek": LLMProviderConfig(
                 name="deepseek",
-                api_key="sk-f78a819f334c493f8afba989139dd6af",
+                api_key="sk-c636331f90cc4349b1556652c0517018",
                 base_url="https://api.deepseek.com",
                 model="deepseek-v4-flash",
             ),

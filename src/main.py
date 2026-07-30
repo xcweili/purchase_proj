@@ -1,456 +1,114 @@
 # -*- coding: utf-8 -*-
-"""采购管理智能体服务 - 主入口"""
-import json
+"""
+FastAPI 应用入口
+提供基于 LangChain Agent 的对话接口（流式/非流式）
+"""
 import os
 import logging
-import sqlite3
-import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
-from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
+from pathlib import Path
 
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from src.services.chat_service import ChatService
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 # ============================================
-# 模拟返回配置
+# 全局服务实例
 # ============================================
-MOCK_RESPONSE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api_protocol", "mock_responses")
-MOCK_FILES = {
-    "allocation": os.path.join(MOCK_RESPONSE_DIR, "allocation.md"),
-    "inventory": os.path.join(MOCK_RESPONSE_DIR, "inventory.md"),
-    "supplier": os.path.join(MOCK_RESPONSE_DIR, "supplier.md"),
-}
+chat_service = ChatService()
 
-async def mock_response_generator(agent_type: str):
-    """读取模拟返回文件并按批返回（每批约10行，逐字流式输出）"""
-    file_path = MOCK_FILES.get(agent_type)
-    if not file_path or not os.path.exists(file_path):
-        yield f"❌ 未找到 {agent_type} 的模拟返回文件\n"
-        return
 
-    batch_size = 10
-    batch = []
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            batch.append(line)
-            if len(batch) >= batch_size:
-                yield "".join(batch)
-                batch = []
-                await asyncio.sleep(0.2)
-    if batch:
-        yield "".join(batch)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    logger.info("应用启动 - 初始化 LangChain Agent...")
+    chat_service.initialize()
+    tools = chat_service.get_available_tools()
+    logger.info("Agent 初始化完成，共注册 %d 个工具:", len(tools))
+    for t in tools:
+        logger.info("  [%s] %s", t["name"], t["description"])
+    yield
+    logger.info("应用关闭")
 
-app = FastAPI(title="采购管理智能体服务", version="10.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="采购智能助手",
+    description="基于 LangChain 的采购管理智能助手（意图识别 + 工具调用）",
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
-from starlette.responses import Response
-from starlette.types import ASGIApp, Scope, Receive, Send
-
-class CORSPreflightMiddleware:
-    def __init__(self, app: ASGIApp):
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] == "http" and scope["method"] == "OPTIONS":
-            response = Response(
-                status_code=200,
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "*",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Max-Age": "86400",
-                    "Content-Length": "0",
-                },
-            )
-            await response(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
-
-app.add_middleware(CORSPreflightMiddleware)
 
 # ============================================
-# 会话管理器导入
+# 请求/响应模型
 # ============================================
-from .utils.session_manager import session_manager
-
-# ============================================
-# 服务层导入
-# ============================================
-from .services import real_db, llm_service
-
-# ============================================
-# 流式服务实例化
-# ============================================
-from .services import AllocationStreamService, InventoryAnalysisStreamService, SupplierMatchStreamService
-
-allocation_stream_service = AllocationStreamService(real_db, llm_service.chat_stream, llm_service.chat)
-inventory_analysis_stream_service = InventoryAnalysisStreamService(real_db, llm_service.chat_stream, llm_service.chat)
-supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.chat_stream, llm_service.chat)
-
-# ============================================
-# 请求模型
-# ============================================
-class AllocationMatchRequest(BaseModel):
-    strategy: str = Field(default="time", description="匹配策略：time/cost/stock/emerg")
-    warehouseCode: str = Field(default="", description="仓库编码筛选")
-    sourceType: str = Field(default="", description="库存类型筛选")
-    projectUnit: str = Field(default="", description="项目单位")
-    demandStartDate: str = Field(default="", description="需求开始时间")
-    demandEndDate: str = Field(default="", description="需求结束时间")
-    planType: str = Field(default="", description="计划类型")
-    materialCodes: Optional[List[str]] = Field(default=None, description="物料编码列表")
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
-
-class InventoryAnalysisRequest(BaseModel):
-    startDate: Optional[str] = Field(default=None, description="开始日期（格式：YYYYMMDD）")
-    endDate: Optional[str] = Field(default=None, description="结束日期（格式：YYYYMMDD）")
-    warehouseCode: Optional[str] = Field(default=None, description="仓库编码，为空时查询所有仓库。传入此字段=水位线模式，不传=补库计划模式")
-    majorCategory: str = Field(default="", description="物资大类编码，如'01'，空=全部（补库计划模式）")
-    mediumCategory: str = Field(default="", description="物资中类编码，如'0101'，空=全部（补库计划模式）")
-    smallCategory: str = Field(default="", description="物资小类编码，如'010101'，空=全部（补库计划模式）")
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
-
-class SupplierMatchRequest(BaseModel):
-    mock: bool = Field(default=False, description="是否启用模拟返回模式，为true时直接读取模拟返回文件并逐字返回")
-
 class ChatRequest(BaseModel):
-    message: str = Field(..., description="用户消息")
+    message: str
+    history: list[dict] = []
+
+
+class ChatResponse(BaseModel):
+    intent: str
+    confidence: float
+    result: str
+    error: str | None = None
+    reasoning: str = ""
+
 
 # ============================================
-# 智能调配接口 - 流式版本
+# API 路由（优先于静态文件）
 # ============================================
-@app.post("/api/allocation/match/stream")
-async def allocation_match_stream(request: AllocationMatchRequest):
-    """智能调配接口 - 流式输出"""
-    logger.info(request.strategy)
-    # 创建会话
-    session_id = session_manager.create_session("allocation")
-    strategy_val = request.strategy if request.strategy else "time"
-
-    if request.mock:
-        logger.info(f"[AllocationStream] 使用模拟返回模式")
-        return StreamingResponse(
-            mock_response_generator("allocation"),
-            media_type="text/plain; charset=utf-8",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "X-Accel-Buffering": "no",
-                "Transfer-Encoding": "chunked",
-                "X-Session-Id": session_id
-            }
-        )
-
-    async def response_generator():
-        try:
-            async for chunk in allocation_stream_service.stream_analyze(
-                strategy=strategy_val,
-                warehouse_code=request.warehouseCode or "",
-                source_type=request.sourceType or "",
-                project_unit=request.projectUnit or "",
-                demand_start_date=request.demandStartDate or "",
-                demand_end_date=request.demandEndDate or "",
-                plan_type=request.planType or "",
-                material_codes=request.materialCodes,
-                session_id=session_id
-            ):
-                # 检查会话是否被取消
-                if session_manager.is_session_cancelled(session_id):
-                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
-                    logger.info(f"[AllocationStream] 会话 {session_id} 已被终止")
-                    break
-                yield chunk
-        except asyncio.CancelledError:
-            logger.info(f"[AllocationStream] 流式响应被取消: {session_id}")
-            yield "\n\n❌ 【会话已终止】连接已关闭\n"
-        finally:
-            # 清理会话
-            session_manager.remove_session(session_id)
-            logger.info(f"[AllocationStream] 会话已清理: {session_id}")
-
-    return StreamingResponse(
-        response_generator(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked",
-            "X-Session-Id": session_id
-        }
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    """对话接口 - 非流式"""
+    result = await chat_service.process(request.message, history=request.history)
+    return ChatResponse(
+        intent=result["intent"],
+        confidence=result["confidence"],
+        result=result.get("result") or "",
+        error=result.get("error"),
+        reasoning=result.get("reasoning", ""),
     )
 
-# ============================================
-# 库存分析接口 - 流式版本
-# ============================================
-@app.post("/api/inventory/analyze/stream")
-async def inventory_analyze_stream(request: InventoryAnalysisRequest):
-    """库存分析接口 - 流式输出
-    根据参数自动判断模式：
-    - 水位线模式：传入 warehouseCode（不含分类参数），AI分析历史出库数据生成水位线
-    - 补库计划模式：传入 majorCategory/mediumCategory/smallCategory，确定性算法+LLM总结
-    """
-    # 判断模式：
-    # - warehouseCode 在请求中存在 → 水位线模式（不管值为空还是非空）
-    # - warehouseCode 不在请求中 → 补库计划模式
-    is_replenishment_mode = (request.warehouseCode is None)
-    mode_name = "补库计划" if is_replenishment_mode else "水位线"
-    logger.info(f"[InventoryStream] 模式={mode_name}, warehouseCode={request.warehouseCode}, "
-                f"majorCategory={request.majorCategory}, mediumCategory={request.mediumCategory}, smallCategory={request.smallCategory}")
 
-    # 创建会话
-    session_id = session_manager.create_session("inventory")
-
-    if request.mock:
-        logger.info(f"[InventoryStream] 使用模拟返回模式")
-        return StreamingResponse(
-            mock_response_generator("inventory"),
-            media_type="text/plain; charset=utf-8",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "X-Accel-Buffering": "no",
-                "Transfer-Encoding": "chunked",
-                "X-Session-Id": session_id
-            }
-        )
-
-    async def response_generator():
-        try:
-            if is_replenishment_mode:
-                # 补库计划模式
-                async for chunk in inventory_analysis_stream_service.stream_analyze_replenishment_plan(
-                    major_category=request.majorCategory,
-                    medium_category=request.mediumCategory,
-                    small_category=request.smallCategory,
-                    start_date=request.startDate,
-                    end_date=request.endDate,
-                    session_id=session_id
-                ):
-                    if session_manager.is_session_cancelled(session_id):
-                        yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
-                        logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
-                        break
-                    yield chunk
-            else:
-                # 水位线模式
-                async for chunk in inventory_analysis_stream_service.stream_analyze_water_level(
-                    start_date=request.startDate,
-                    end_date=request.endDate,
-                    warehouse_code=request.warehouseCode,
-                    session_id=session_id
-                ):
-                    if session_manager.is_session_cancelled(session_id):
-                        yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
-                        logger.info(f"[InventoryStream] 会话 {session_id} 已被终止")
-                        break
-                    yield chunk
-        except asyncio.CancelledError:
-            logger.info(f"[InventoryStream] 流式响应被取消: {session_id}")
-            yield "\n\n❌ 【会话已终止】连接已关闭\n"
-        finally:
-            # 清理会话
-            session_manager.remove_session(session_id)
-            logger.info(f"[InventoryStream] 会话已清理: {session_id}")
-
-    return StreamingResponse(
-        response_generator(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked",
-            "X-Session-Id": session_id
-        }
-    )
-
-# ============================================
-# 供应商匹配接口 - 流式版本
-# ============================================
-@app.post("/api/supplier/match/stream")
-async def supplier_match_stream(request: SupplierMatchRequest):
-    """供应商匹配接口 - 流式输出"""
-
-    # 创建会话
-    session_id = session_manager.create_session("supplier")
-
-    if request.mock:
-        logger.info(f"[SupplierStream] 使用模拟返回模式")
-        return StreamingResponse(
-            mock_response_generator("supplier"),
-            media_type="text/plain; charset=utf-8",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "X-Accel-Buffering": "no",
-                "Transfer-Encoding": "chunked",
-                "X-Session-Id": session_id
-            }
-        )
-
-    async def response_generator():
-        try:
-            async for chunk in supplier_match_stream_service.stream_analyze(
-                session_id=session_id
-            ):
-                # 检查会话是否被取消
-                if session_manager.is_session_cancelled(session_id):
-                    yield "\n\n❌ 【会话已终止】用户主动取消了当前分析任务\n"
-                    logger.info(f"[SupplierStream] 会话 {session_id} 已被终止")
-                    break
-                yield chunk
-        except asyncio.CancelledError:
-            logger.info(f"[SupplierStream] 流式响应被取消: {session_id}")
-            yield "\n\n❌ 【会话已终止】连接已关闭\n"
-        finally:
-            # 清理会话
-            session_manager.remove_session(session_id)
-            logger.info(f"[SupplierStream] 会话已清理: {session_id}")
-
-    return StreamingResponse(
-        response_generator(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "X-Accel-Buffering": "no",
-            "Transfer-Encoding": "chunked",
-            "X-Session-Id": session_id
-        }
-    )
-
-# ============================================
-# 对话接口
-# ============================================
 @app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """通用对话接口 - 流式输出"""
-    system_prompt = "你是一个专业的电力物料储备、匹配、调配的专家，你需要根据你所掌握的知识，思考分析用户的问题，并进行回答。"
+async def chat_stream(raw: Request):
+    """对话接口 - 流式（SSE）"""
+    body = await raw.json()
+    message = body.get("message", "")
+    history = body.get("history", [])
 
-    async def response_generator():
-        async for chunk in llm_service.chat_stream(request.message, system_prompt, messages=None):
-            yield chunk
+    async def event_generator():
+        async for sse_event in chat_service.process_stream(message, history=history):
+            yield sse_event
 
     return StreamingResponse(
-        response_generator(),
-        media_type="text/plain",
+        event_generator(),
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
-        }
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
-# ============================================
-# 会话管理接口
-# ============================================
-@app.post("/api/session/{session_id}/stop")
-async def stop_session(session_id: str):
-    """终止指定会话的流式生成
-
-    Args:
-        session_id: 会话ID
-
-    Returns:
-        终止结果
-    """
-    success = session_manager.cancel_session(session_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="会话不存在或已结束")
-
-    return {
-        "code": 200,
-        "message": "会话终止信号已发送",
-        "data": {
-            "sessionId": session_id,
-            "stopped": True
-        }
-    }
-
-
-@app.get("/api/session/{session_id}/status")
-async def get_session_status(session_id: str):
-    """获取会话状态
-
-    Args:
-        session_id: 会话ID
-
-    Returns:
-        会话状态信息
-    """
-    session = session_manager.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在或已结束")
-
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "sessionId": session.session_id,
-            "agentType": session.agent_type,
-            "isActive": session.is_active,
-            "isCancelled": session.is_cancelled,
-            "createdAt": session.created_at.isoformat() if session.created_at else None,
-            "cancelledAt": session.cancelled_at.isoformat() if session.cancelled_at else None
-        }
-    }
+@app.get("/api/tools")
+async def list_tools():
+    """获取已注册的工具列表"""
+    return {"tools": chat_service.get_available_tools()}
 
 
 # ============================================
-# 健康检查接口
+# 静态文件（前端页面）
 # ============================================
-@app.get("/api/health")
-async def health_check():
-    """健康检查接口"""
-    return {"status": "ok"}
-
-
-# ============================================
-# 应用启动和关闭事件
-# ============================================
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时初始化"""
-    await session_manager.start()
-    logger.info("[Main] 应用启动完成，会话管理器已初始化")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时清理"""
-    await session_manager.stop()
-    logger.info("[Main] 应用关闭，会话管理器已停止")
-
-
-# ============================================
-# 静态文件服务
-# ============================================
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.get("/favicon.ico")
-async def favicon():
-    return FileResponse("static/favicon.ico") if os.path.exists("static/favicon.ico") else Response(status_code=204)
-
-@app.get("/")
-async def root():
-    """首页 - 流式交互界面"""
-    return FileResponse("static/index.html")
+static_dir = os.path.join(Path(__file__).resolve().parent.parent, "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
