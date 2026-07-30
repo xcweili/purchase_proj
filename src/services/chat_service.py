@@ -13,6 +13,7 @@ from src.tools.base import tool
 # 导入独立工具模块（导入即触发 @tool 装饰器注册）
 import src.tools.inventory_tools
 import src.tools.purchase_tools
+import src.tools.approval_tools
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,11 @@ class ChatService:
     def __init__(self):
         self.agent: Agent | None = None
         # 多轮参数补齐状态
-        self._pending_intent: Optional[str] = None       # 待执行工具名
-        self._pending_missing: list[str] = []             # 仍缺失的参数
-        self._pending_params: dict = {}                   # 已有部分参数
+        self._pending_intent: Optional[str] = None
+        self._pending_missing: list[str] = []
+        self._pending_params: dict = {}
+        # 人工确认状态
+        self._pending_confirm: Optional[dict] = None
 
     def initialize(self):
         """初始化 Agent 并注册默认工具"""
@@ -68,11 +71,53 @@ class ChatService:
         return self.agent.get_tool_list()
 
     def clear_pending(self):
-        """清除待办参数补齐状态"""
+        """清除所有待办状态"""
         self._pending_intent = None
         self._pending_missing = []
         self._pending_params = {}
-        logger.debug("待办参数补齐状态已清除")
+        self._pending_confirm = None
+        logger.debug("待办状态已清除")
+
+    async def confirm_action(self, confirm_id: str, choice: str) -> dict:
+        """处理人工确认/取消
+
+        Args:
+            confirm_id: 确认会话 ID
+            choice: 用户的选择值（如 "confirm" / "cancel"）
+
+        Returns:
+            执行结果（确认后执行 / 取消提示）
+        """
+        if not self._pending_confirm:
+            return {"result": "没有待处理的确认请求", "error": "no_pending"}
+
+        if self._pending_confirm["confirm_id"] != confirm_id:
+            return {"result": "确认 ID 不匹配", "error": "id_mismatch"}
+
+        if choice == "cancel":
+            self.clear_pending()
+            return {"result": "❌ 操作已取消", "error": None}
+
+        if choice != "confirm":
+            self.clear_pending()
+            return {"result": f"未知选择: {choice}", "error": "invalid_choice"}
+
+        # 用户确认 → 执行后续工具
+        if not self.agent:
+            self.clear_pending()
+            return {"result": "服务未初始化", "error": "not_initialized"}
+
+        try:
+            tool_name = self._pending_confirm["pending_tool"]
+            params = self._pending_confirm["pending_params"]
+            logger.info("人工确认后执行: [%s] 参数=%s", tool_name, params)
+            result = await self.agent.registry.execute(tool_name, **params)
+            self.clear_pending()
+            return {"result": str(result), "error": None}
+        except Exception as e:
+            logger.exception("确认后执行失败")
+            self.clear_pending()
+            return {"result": f"执行失败: {str(e)}", "error": str(e)}
 
     async def process(self, user_input: str, history: list | None = None) -> dict:
         """非流式处理用户输入（支持 pending 补齐）"""
@@ -89,6 +134,24 @@ class ChatService:
                 partial_params=self._pending_params,
             )
             if fill["filled"]:
+                # 填充完毕后需要人工确认
+                if fill.get("_requires_confirm"):
+                    self._pending_confirm = {
+                        "confirm_id": fill["confirm_id"],
+                        "pending_tool": fill["pending_tool"],
+                        "pending_params": fill["pending_params"],
+                    }
+                    return {
+                        "intent": self._pending_intent,
+                        "confidence": 1.0,
+                        "result": fill["result"],
+                        "error": None,
+                        "reasoning": "多轮补齐后需要人工确认",
+                        "_requires_confirm": True,
+                        "confirm_id": fill["confirm_id"],
+                        "options": fill["options"],
+                    }
+
                 self.clear_pending()
                 return {
                     "intent": self._pending_intent,
@@ -121,6 +184,15 @@ class ChatService:
             self._pending_missing = result.get("missing_params", [])
             self._pending_params = result.get("pending_params", {})
 
+        # 如果返回了人工确认信号，保存待确认状态
+        if result.get("_requires_confirm"):
+            self._pending_confirm = {
+                "confirm_id": result["confirm_id"],
+                "pending_tool": result.get("pending_tool"),
+                "pending_params": result.get("pending_params"),
+            }
+            logger.info("保存待确认状态(非流式): confirm_id=%s", result["confirm_id"])
+
         return result
 
     async def process_stream(
@@ -148,8 +220,24 @@ class ChatService:
             )
 
             if fill["filled"]:
-                self.clear_pending()
-                yield _sse("tool_result", {"content": fill["result"]})
+                # 填充完毕后需要人工确认
+                if fill.get("_requires_confirm"):
+                    confirm_data = {
+                        "confirm_id": fill["confirm_id"],
+                        "question": fill["result"],
+                        "options": fill["options"],
+                        "pending_tool": fill["pending_tool"],
+                        "pending_params": fill["pending_params"],
+                    }
+                    self._pending_confirm = {
+                        "confirm_id": fill["confirm_id"],
+                        "pending_tool": fill["pending_tool"],
+                        "pending_params": fill["pending_params"],
+                    }
+                    yield _sse("human_confirm", confirm_data)
+                else:
+                    self.clear_pending()
+                    yield _sse("tool_result", {"content": fill["result"]})
             else:
                 self._pending_params = fill["params"]
                 self._pending_missing = fill["still_missing"]
@@ -164,14 +252,13 @@ class ChatService:
             return
 
         # 正常流式处理
-        result_text = ""
         pending_intent = None
         pending_missing = []
         pending_params = {}
 
         async for event_str in self.agent.process_stream(user_input, history=history):
             yield event_str
-            # 从 SSE 事件中捕捉 ask_params
+            # 捕捉 ask_params → 保存 pending 补齐状态
             if event_str.startswith("event: ask_params"):
                 import re
                 m = re.search(r'data: (\{.*\})', event_str)
@@ -180,6 +267,18 @@ class ChatService:
                     pending_intent = data.get("pending_intent")
                     pending_missing = data.get("missing_params", [])
                     pending_params = data.get("pending_params", {})
+            # 捕捉 human_confirm → 保存 pending 确认状态
+            elif event_str.startswith("event: human_confirm"):
+                import re
+                m = re.search(r'data: (\{.*\})', event_str)
+                if m:
+                    data = json.loads(m.group(1))
+                    self._pending_confirm = {
+                        "confirm_id": data["confirm_id"],
+                        "pending_tool": data["pending_tool"],
+                        "pending_params": data["pending_params"],
+                    }
+                    logger.info("保存待确认状态: confirm_id=%s", data["confirm_id"])
 
         # 保存 pending 状态
         if pending_intent:

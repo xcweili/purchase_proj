@@ -322,6 +322,11 @@
   .msg-body strong { font-weight: 600; }
   .msg-body a { color: var(--primary); text-decoration: none; }
   .msg-body a:hover { text-decoration: underline; }
+  .msg-body table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+  .msg-body table td { padding: 5px 8px; border-bottom: 1px solid var(--gray-200); vertical-align: top; }
+  .msg-body table td:first-child { font-weight: 500; color: var(--gray-600); white-space: nowrap; width: 26%; }
+  .msg-body table tr:last-child td { border-bottom: none; }
+  .msg-body table td strong { color: var(--gray-900); }
 
   /* 加载动画 */
   .msg-loading .msg-body {
@@ -462,6 +467,132 @@
     color: #dc2626;
     border: 1px solid #fecaca;
   }
+
+  /* ===== 确认对话框 ===== */
+  .confirm-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .confirm-dialog {
+    background: #fff;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    max-width: 520px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    animation: slideUp 0.25s ease-out;
+  }
+
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+  .confirm-header {
+    padding: 16px 20px 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--gray-900);
+  }
+
+  .confirm-body {
+    padding: 12px 20px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--gray-700);
+  }
+
+  .confirm-body .msg-body {
+    background: var(--gray-50);
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    margin: 0;
+    box-shadow: none;
+  }
+
+  .confirm-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .confirm-body table th,
+  .confirm-body table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--gray-200);
+    vertical-align: top;
+    text-align: left;
+  }
+
+  .confirm-body table th {
+    font-weight: 600;
+    color: var(--gray-700);
+    background: var(--gray-50);
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+
+  .confirm-body table td:first-child {
+    font-weight: 500;
+    color: var(--gray-600);
+    white-space: nowrap;
+    width: 28%;
+  }
+
+  .confirm-body table tr:last-child td,
+  .confirm-body table tr:last-child th {
+    border-bottom: none;
+  }
+
+  .confirm-body table td strong {
+    color: var(--gray-900);
+  }
+
+  .confirm-actions {
+    display: flex;
+    gap: 8px;
+    padding: 0 20px 16px;
+    justify-content: flex-end;
+  }
+
+  .confirm-actions button {
+    padding: 8px 20px;
+    border-radius: var(--radius);
+    border: 1px solid var(--gray-200);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .confirm-actions .btn-confirm {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+  }
+
+  .confirm-actions .btn-confirm:hover { background: var(--primary-light); }
+
+  .confirm-actions .btn-cancel {
+    background: #fff;
+    color: var(--gray-600);
+  }
+
+  .confirm-actions .btn-cancel:hover { background: var(--gray-50); border-color: var(--gray-300); }
+
+  .confirm-loading {
+    text-align: center;
+    padding: 20px;
+    color: var(--gray-500);
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
@@ -498,6 +629,15 @@
       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
     <button class="btn-send" id="sendBtn" onclick="sendMessage()">发送</button>
   </div>
+
+  <!-- 确认对话框 -->
+  <div class="confirm-overlay" id="confirmOverlay" style="display:none;" onclick="closeConfirm(event)">
+    <div class="confirm-dialog" onclick="event.stopPropagation()">
+      <div class="confirm-header">📋 操作确认</div>
+      <div class="confirm-body" id="confirmBody"></div>
+      <div class="confirm-actions" id="confirmActions"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -520,6 +660,12 @@ const streamToggle = document.getElementById('streamToggle');
 const toolsToggleBtn = document.getElementById('toolsToggleBtn');
 const toolsPanel = document.getElementById('toolsPanel');
 const toolsGrid = document.getElementById('toolsGrid');
+
+// 确认对话框元素
+const confirmOverlay = document.getElementById('confirmOverlay');
+const confirmBody = document.getElementById('confirmBody');
+const confirmActions = document.getElementById('confirmActions');
+let currentConfirmId = null;
 
 // 初始化
 streamToggle.addEventListener('change', () => { state.isStreaming = streamToggle.checked; });
@@ -737,6 +883,17 @@ async function sendNonStream(text) {
   hideLoading();
 
   const thinkingData = { intent: data.intent, confidence: data.confidence, reasoning: data.reasoning };
+
+  // 需要人工确认
+  if (data._requires_confirm) {
+    // 先把问题文本作为消息展示（思考过程+内容）
+    addMessage('assistant', data.result, thinkingData);
+    state.history.push({ role: 'assistant', content: data.result });
+    // 弹出确认对话框
+    showConfirmDialog(data);
+    return;
+  }
+
   if (data.error) {
     addError(data.error);
     state.history.push({ role: 'assistant', content: data.error });
@@ -840,12 +997,16 @@ async function sendStream(text) {
           contentWrap.appendChild(bodyEl);
         }
         bodyEl.innerHTML = marked.parse(content);
-        // 在 body 上加个标记，通知用户需要补充信息
         const hint = document.createElement('div');
         hint.style.cssText = 'font-size:11px;color:var(--gray-400);margin-top:4px;';
         hint.textContent = '💡 请在输入框中补充以上信息';
         contentWrap.appendChild(hint);
         scrollToBottom();
+        break;
+
+      case 'human_confirm':
+        // 显示确认对话框
+        showConfirmDialog(data);
         break;
 
       case 'error':
@@ -877,7 +1038,73 @@ function clearHistory() {
   }
   state.history = [];
   messagesEl.innerHTML = '';
+  confirmOverlay.style.display = 'none';
+  currentConfirmId = null;
   inputBox.focus();
+}
+
+// ===== Human-in-the-Loop 确认对话框 =====
+function showConfirmDialog(data) {
+  currentConfirmId = data.confirm_id;
+  // 用 msg-body 包裹，与主消息区保持一致的 markdown 渲染
+  confirmBody.innerHTML = '<div class="msg-body">' + marked.parse(data.question) + '</div>';
+
+  confirmActions.innerHTML = '';
+  const options = data.options || [
+    { value: 'confirm', label: '✅ 确认' },
+    { value: 'cancel', label: '❌ 取消' },
+  ];
+
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.textContent = opt.label;
+    btn.className = opt.value === 'confirm' || opt.value === 'yes' ? 'btn-confirm' : 'btn-cancel';
+    btn.onclick = () => handleConfirmChoice(opt.value);
+    confirmActions.appendChild(btn);
+  }
+
+  confirmOverlay.style.display = 'flex';
+}
+
+function closeConfirm(event) {
+  if (event && event.target !== confirmOverlay) return;
+  confirmOverlay.style.display = 'none';
+}
+
+async function handleConfirmChoice(choice) {
+  if (!currentConfirmId) return;
+
+  // 显示加载状态
+  confirmActions.innerHTML = '<div class="confirm-loading">⏳ 正在处理...</div>';
+
+  try {
+    const resp = await fetch('/api/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm_id: currentConfirmId, choice }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+
+    confirmOverlay.style.display = 'none';
+    currentConfirmId = null;
+
+    // 显示处理结果到消息区域
+    addMessage('assistant', result.result || result.error || '未知结果');
+
+    if (result.result && !result.error) {
+      state.history.push({ role: 'assistant', content: result.result });
+    }
+  } catch (err) {
+    confirmActions.innerHTML = `<div style="color:#dc2626;font-size:13px;">请求失败: ${err.message}</div>`;
+    // 保留关闭按钮
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '关闭';
+    closeBtn.className = 'btn-cancel';
+    closeBtn.onclick = () => { confirmOverlay.style.display = 'none'; };
+    confirmActions.appendChild(closeBtn);
+  }
 }
 </script>
 

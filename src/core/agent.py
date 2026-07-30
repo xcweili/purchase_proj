@@ -85,9 +85,40 @@ class Agent:
             "supplier": "供应商名称",
             "name": "物资名称",
             "threshold": "库存阈值",
+            "material": "物资名称",
+            "quantity": "采购数量",
+            "unit": "单位",
         }
         need = "、".join(param_names_cn.get(p, p) for p in missing)
         return f"您想查询{tool_desc}，请提供以下信息：**{need}**"
+
+    def _build_uncertain_msg(self, user_input: str, intent_name: str) -> str:
+        """构建意图不确定时的澄清追问"""
+        suggestions = []
+        if any(kw in user_input for kw in ["库存", "物资", "材料"]):
+            suggestions.append("查询库存")
+        if any(kw in user_input for kw in ["采购", "购买", "买", "进货"]):
+            suggestions.append("发起采购")
+        if any(kw in user_input for kw in ["订单", "订单编号", "PO"]):
+            suggestions.append("查询采购订单")
+        if any(kw in user_input for kw in ["时间", "日期"]):
+            suggestions.append("查看时间")
+
+        if not suggestions:
+            return (
+                f"我没完全理解您的意思，请更具体地描述一下您想做什么？\n\n"
+                f"例如：\n"
+                f"- 查询某个物资的库存\n"
+                f"- 发起采购申请\n"
+                f"- 查询采购订单"
+            )
+
+        hint = "、".join(suggestions)
+        return (
+            f"您是想要 **{hint}** 吗？请更具体地描述一下，比如：\n\n"
+            f"- 具体想查什么？\n"
+            f"- 具体的名称或编号是多少？"
+        )
 
     async def process(self, user_input: str, history: list | None = None, **context) -> dict:
         """处理用户输入（非流式）
@@ -106,11 +137,23 @@ class Agent:
         )
 
         if intent.intent_name == "unknown" or intent.confidence < 0.3:
+            logger.info("意图不明确或置信度过低: intent=%s confidence=%.2f", intent.intent_name, intent.confidence)
             return {
                 "intent": intent.intent_name,
                 "confidence": intent.confidence,
-                "result": None,
-                "error": "无法识别意图",
+                "result": self._build_uncertain_msg(user_input, intent.intent_name),
+                "error": None,
+                "reasoning": intent.reasoning,
+            }
+
+        # 置信度中等（0.3-0.6）：LLM 不太确定，主动询问确认
+        if intent.method == "llm" and intent.confidence < 0.6:
+            logger.info("意图置信度中等(%.2f)，发起澄清追问", intent.confidence)
+            return {
+                "intent": intent.intent_name,
+                "confidence": intent.confidence,
+                "result": self._build_uncertain_msg(user_input, intent.intent_name),
+                "error": None,
                 "reasoning": intent.reasoning,
             }
 
@@ -134,6 +177,23 @@ class Agent:
         try:
             logger.info("开始执行工具: [%s] 参数=%s", intent.intent_name, params)
             result = await self.registry.execute(intent.intent_name, **params)
+
+            # 检测是否需要人工确认
+            if isinstance(result, dict) and result.get("_requires_confirm"):
+                logger.info("需要人工确认: [%s] confirm_id=%s", intent.intent_name, result["confirm_id"])
+                return {
+                    "intent": intent.intent_name,
+                    "confidence": intent.confidence,
+                    "result": result["question"],
+                    "error": None,
+                    "reasoning": intent.reasoning,
+                    "_requires_confirm": True,
+                    "confirm_id": result["confirm_id"],
+                    "options": result["options"],
+                    "pending_tool": result["on_confirm"]["tool"],
+                    "pending_params": result["on_confirm"]["params"],
+                }
+
             logger.info("工具执行完成: [%s] 结果=%s", intent.intent_name, str(result)[:200])
             return {
                 "intent": intent.intent_name,
@@ -185,7 +245,17 @@ class Agent:
         })
 
         if intent.intent_name == "unknown" or intent.confidence < 0.3:
-            yield _sse("error", {"content": "无法识别意图"})
+            logger.info("意图不明确: [%s] confidence=%.2f", intent.intent_name, intent.confidence)
+            msg = self._build_uncertain_msg(user_input, intent.intent_name)
+            yield _sse("tool_result", {"content": msg})
+            yield _sse("done", {})
+            return
+
+        # 置信度中等(0.3-0.6)：LLM不太确定，主动询问
+        if intent.method == "llm" and intent.confidence < 0.6:
+            logger.info("意图置信度中等(%.2f)，发起澄清追问", intent.confidence)
+            msg = self._build_uncertain_msg(user_input, intent.intent_name)
+            yield _sse("tool_result", {"content": msg})
             yield _sse("done", {})
             return
 
@@ -209,6 +279,21 @@ class Agent:
         try:
             logger.info("[流式] 开始执行工具: [%s] 参数=%s", intent.intent_name, params)
             result = await self.registry.execute(intent.intent_name, **params)
+
+            # === 检测是否需要人工确认 ===
+            if isinstance(result, dict) and result.get("_requires_confirm"):
+                confirm_data = {
+                    "confirm_id": result["confirm_id"],
+                    "question": result["question"],
+                    "options": result["options"],
+                    "pending_tool": result["on_confirm"]["tool"],
+                    "pending_params": result["on_confirm"]["params"],
+                }
+                logger.info("需要人工确认: [%s] confirm_id=%s", intent.intent_name, result["confirm_id"])
+                yield _sse("human_confirm", confirm_data)
+                yield _sse("done", {"_has_pending_confirm": True, "confirm_id": result["confirm_id"]})
+                return
+
             logger.info("[流式] 工具执行完成: [%s]", intent.intent_name)
             yield _sse("tool_result", {"content": str(result)})
         except Exception as e:
@@ -240,7 +325,7 @@ class Agent:
         # 用 LLM 从用户输入中提取缺失参数值
         from src.config.llm_config import get_current_provider
         from langchain_openai import ChatOpenAI
-        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.messages import SystemMessage, HumanMessage
 
         provider = get_current_provider()
         if not provider:
@@ -255,23 +340,20 @@ class Agent:
             timeout=provider.timeout,
         )
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一个参数提取助手。从用户输入中提取指定参数的值，返回纯 JSON，不要包含其他文字。"),
-            ("human", (
-                "用户输入: {user_input}\n"
-                "需要提取的参数: {missing_params}\n"
-                "已确定的参数: {partial_params}\n"
-                "请只返回JSON: {{{{提取的参数名: 提取的值}}}}"
-            )),
-        ])
-
         try:
-            messages = prompt.format_messages(
-                user_input=user_input,
-                missing_params=json.dumps(missing_params, ensure_ascii=False),
-                partial_params=json.dumps(partial_params, ensure_ascii=False),
+            system_msg = SystemMessage(content=(
+                "你是一个参数提取助手。从用户输入中提取指定参数的值，返回纯 JSON，不要包含其他文字。\n"
+                "类型约束：quantity 字段必须是纯数字（不包含单位），如 100 而非 '100吨'"
+            ))
+            human_content = (
+                f"用户输入: {user_input}\n"
+                f"需要提取的参数: {json.dumps(missing_params, ensure_ascii=False)}\n"
+                f"已确定的参数: {json.dumps(partial_params, ensure_ascii=False)}\n"
+                f"请只返回JSON: {{提取的参数名: 提取的值}}"
             )
-            response = await llm.ainvoke(messages)
+            human_msg = HumanMessage(content=human_content)
+
+            response = await llm.ainvoke([system_msg, human_msg])
 
             import re
             json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
@@ -292,6 +374,20 @@ class Agent:
 
                 # 全部齐全，执行
                 result = await self.registry.execute(intent_name, **params)
+
+                # 检测是否需要人工确认（透传确认信号）
+                if isinstance(result, dict) and result.get("_requires_confirm"):
+                    return {
+                        "filled": True, "params": params, "still_missing": [],
+                        "result": result["question"],
+                        "msg": None,
+                        "_requires_confirm": True,
+                        "confirm_id": result["confirm_id"],
+                        "options": result["options"],
+                        "pending_tool": result["on_confirm"]["tool"],
+                        "pending_params": result["on_confirm"]["params"],
+                    }
+
                 return {
                     "filled": True, "params": params, "still_missing": [],
                     "result": str(result), "msg": None,

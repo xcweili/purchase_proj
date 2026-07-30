@@ -54,6 +54,11 @@ class ChatRequest(BaseModel):
     history: list[dict] = []
 
 
+class ConfirmRequest(BaseModel):
+    confirm_id: str
+    choice: str
+
+
 class ChatResponse(BaseModel):
     intent: str
     confidence: float
@@ -69,13 +74,20 @@ class ChatResponse(BaseModel):
 async def chat(request: ChatRequest):
     """对话接口 - 非流式"""
     result = await chat_service.process(request.message, history=request.history)
-    return ChatResponse(
-        intent=result["intent"],
-        confidence=result["confidence"],
-        result=result.get("result") or "",
-        error=result.get("error"),
-        reasoning=result.get("reasoning", ""),
-    )
+    resp = {
+        "intent": result["intent"],
+        "confidence": result["confidence"],
+        "result": result.get("result") or "",
+        "error": result.get("error"),
+        "reasoning": result.get("reasoning", ""),
+    }
+    # 透传人工确认信号（非流式模式也需要对话框）
+    if result.get("_requires_confirm"):
+        resp["_requires_confirm"] = True
+        resp["confirm_id"] = result["confirm_id"]
+        resp["question"] = result.get("result", "")
+        resp["options"] = result.get("options", [])
+    return resp
 
 
 @app.post("/api/chat/stream")
@@ -104,6 +116,16 @@ async def chat_stream(raw: Request):
 async def list_tools():
     """获取已注册的工具列表"""
     return {"tools": chat_service.get_available_tools()}
+
+
+@app.post("/api/confirm")
+async def confirm(request: ConfirmRequest):
+    """人工确认接口（HITL）"""
+    result = await chat_service.confirm_action(
+        confirm_id=request.confirm_id,
+        choice=request.choice,
+    )
+    return result
 
 
 # ============================================

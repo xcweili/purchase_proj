@@ -9,7 +9,7 @@
 """
 import re
 import logging
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
@@ -118,11 +118,8 @@ class KeywordMatcher:
             if keyword not in text:
                 continue
             # 尝试提取参数值——支持两种语序：
-            #   1. "查一下碳钢钢板的库存" → 匹配"库存"前的"碳钢钢板"
-            #   2. "查一下碳钢钢板库存"   → 匹配"库存"前的"碳钢钢板"
-            #   3. "库存碳钢钢板"         → 匹配"库存"后的"碳钢钢板"
 
-            # 优先匹配关键词前面文字（中文中物资名称通常在"库存"前面）
+            # 优先匹配关键词前面文字
             match = re.search(rf'(\S+?)\s*的?\s*{re.escape(keyword)}', text)
             if not match:
                 match = re.search(rf'{re.escape(keyword)}\s*[:：]?\s*(\S+)', text)
@@ -130,18 +127,7 @@ class KeywordMatcher:
             param_value = match.group(1).strip('，。、；：！？,.;:!?') if match and match.group(1) else ""
 
             # ----- 过滤无效参数 -----
-            # 1) 空值或单字符
-            if not param_value or len(param_value) <= 1:
-                logger.debug("关键词[%s]命中但参数过短(=%s)，交给 LLM", keyword, param_value)
-                continue
-
-            # 2) 包含停用词（时间、疑问、语气等，不是物资名的一部分）
-            stop_words = {"现在", "目前", "当前", "今天", "请问", "查询",
-                          "查一下", "我要查", "多少", "几个", "所有", "全部",
-                          "怎么", "如何", "什么", "这个", "那个", "在", "还",
-                          "只", "有"}
-            if any(sw in param_value for sw in stop_words):
-                logger.debug("关键词[%s]命中但参数含停用词(%s)，交给 LLM", keyword, param_value)
+            if not self._is_valid_param(param_value, keyword):
                 continue
 
             logger.info("关键词+参数命中: [%s] %s=%s", intent_name, param_name, param_value)
@@ -153,6 +139,58 @@ class KeywordMatcher:
                 method="keyword",
             )
         return None
+
+    # ============================================
+    # 停用词表（扩展版）
+    # ============================================
+    _STOP_WORDS = {
+        # 时间/状态类
+        "现在", "目前", "当前", "今天", "昨天", "明天",
+        # 语气/疑问类
+        "请问", "查一下", "我要查", "我想查", "帮我查", "能否查",
+        "多少", "几个", "哪些", "所有", "全部",
+        "怎么", "如何", "什么", "哪个", "这个", "那个",
+        # 动词短语
+        "我想要", "我需要", "我要", "我想", "我打算",
+        "查查", "看看", "检查", "查询", "查找", "搜索",
+        "有", "没有", "在", "还", "只", "很", "太",
+        # 表达"列举"类
+        "列举", "列出", "展示", "显示", "告诉",
+    }
+
+    # 动词/功能词（参数中只要含这些词，基本不可能是物资名）
+    _VERB_LIKE = re.compile(
+        r'(采购|购买|进货|下单|申请|审批|查找|查询|搜索|需要|想要|打算|'
+        r'检查|查看|看看|查查|列举|列出|展示|显示|告诉|统计|汇总|报告)'
+    )
+
+    def _is_valid_param(self, value: str, keyword: str) -> bool:
+        """校验关键词提取的参数是否有效
+
+        返回 False 表示参数无效，应交给 LLM 兜底。
+        """
+        # 1) 空值或单字符
+        if not value or len(value) <= 1:
+            logger.debug("关键词[%s]命中但参数过短(=%s)，交给 LLM", keyword, value)
+            return False
+
+        # 2) 包含停用词
+        for sw in self._STOP_WORDS:
+            if sw in value:
+                logger.debug("关键词[%s]命中但参数含停用词(%s)，交给 LLM", keyword, value)
+                return False
+
+        # 3) 包含动词短语（几乎不可能是物资名）
+        if self._VERB_LIKE.search(value):
+            logger.debug("关键词[%s]命中但参数含动词(%s)，交给 LLM", keyword, value)
+            return False
+
+        # 4) 参数长于 10 个字且不含中文（可能是无关文本）
+        if len(value) > 10 and not re.search(r'[\u4e00-\u9fff]', value):
+            logger.debug("关键词[%s]命中但参数过长且无中文(%s)，交给 LLM", keyword, value)
+            return False
+
+        return True
 
 
 # 全局关键词匹配器
@@ -211,6 +249,43 @@ class IntentRecognizer:
         # 这些会在 recognize() 中特殊处理
         logger.debug("关键词规则已注册")
 
+    # 采购数量提取正则（匹配 "100吨"、"50公斤" 等）
+    _QTY_RE = re.compile(r'(\d+(?:\.\d+)?)\s*(吨|公斤|斤|千克|克|个|件|只|套|根|条|米|平方米|升|瓶|箱|包)')
+
+    def _extract_quantity(self, text: str) -> tuple[float | None, str | None]:
+        """从文本中尝试提取数量和单位
+
+        Returns:
+            (quantity, unit) 或 (None, None)
+        """
+        m = self._QTY_RE.search(text)
+        if m:
+            return float(m.group(1)), m.group(2)
+        return None, None
+
+    def _clean_material_name(self, material: str) -> str:
+        """清理物资名称：去掉前置的数量和单位描述
+
+        例如 "100吨碳钢钢板" → "碳钢钢板"
+        """
+        cleaned = self._QTY_RE.sub('', material, count=1).strip()
+        return cleaned or material
+
+    def _enrich_purchase_params(self, text: str, params: dict) -> dict:
+        """丰富采购参数的提取：补充数量+清理物资名"""
+        # 清理物资名称
+        if "material" in params:
+            params["material"] = self._clean_material_name(params["material"])
+
+        # 提取数量和单位
+        quantity, unit = self._extract_quantity(text)
+        if quantity is not None:
+            params.setdefault("quantity", quantity)
+        if unit is not None:
+            params.setdefault("unit", unit)
+
+        return params
+
     def _build_messages(self, user_input: str, history: list | None = None):
         """构建 LLM 消息列表（含历史上下文）"""
         if not history:
@@ -250,12 +325,23 @@ class IntentRecognizer:
         text = user_input.strip().lower()
 
         # === 第一层：关键词快速匹配 ===
-        # 1a. 简单关键词匹配
+        # 1a. 简单关键词（社交/时间）
         result = keyword_matcher.match(text)
         if result:
             return result
 
-        # 1b. 库存查询关键词（带参数提取）
+        # 1b. 采购相关 → batch_purchase
+        purchase_patterns = [
+            ("采购", "material", str),
+            ("买", "material", str),
+            ("进货", "material", str),
+        ]
+        result = keyword_matcher.match_with_params(text, "batch_purchase", purchase_patterns)
+        if result:
+            result.parameters = self._enrich_purchase_params(text, result.parameters)
+            return result
+
+        # 1c. 库存查询（带参数提取）
         inventory_patterns = [
             ("库存", "name", str),
             ("物资", "name", str),
@@ -265,9 +351,8 @@ class IntentRecognizer:
         if result:
             return result
 
-        # 1c. 低库存关键词
+        # 1d. 低库存关键词
         if any(kw in text for kw in ["库存不足", "低库存", "缺货", "库存告急", "预警"]):
-            # 尝试提取阈值
             threshold_match = re.search(r'低于\s*(\d+)|小于\s*(\d+)|(\d+)\s*以下', text)
             threshold = int(threshold_match.group(1) or threshold_match.group(2) or threshold_match.group(3) or 100)
             logger.info("关键词命中: [query_low_stock] 阈值=%d", threshold)
@@ -307,11 +392,23 @@ class IntentRecognizer:
         text = user_input.strip().lower()
 
         # === 第一层：关键词快速匹配 ===
+        # 1a. 简单关键词（社交/时间）
         result = keyword_matcher.match(text)
         if result:
             return result
 
-        # 库存查询关键词
+        # 1b. 采购相关 → batch_purchase（带参数提取：物资名称 + 数量）
+        purchase_patterns = [
+            ("采购", "material", str),
+            ("买", "material", str),
+            ("进货", "material", str),
+        ]
+        result = keyword_matcher.match_with_params(text, "batch_purchase", purchase_patterns)
+        if result:
+            result.parameters = self._enrich_purchase_params(text, result.parameters)
+            return result
+
+        # 1c. 库存查询（带参数提取）
         inventory_patterns = [
             ("库存", "name", str),
             ("物资", "name", str),
@@ -321,7 +418,7 @@ class IntentRecognizer:
         if result:
             return result
 
-        # 低库存关键词
+        # 1d. 低库存关键词
         if any(kw in text for kw in ["库存不足", "低库存", "缺货", "库存告急", "预警"]):
             threshold_match = re.search(r'低于\s*(\d+)|小于\s*(\d+)|(\d+)\s*以下', text)
             threshold = int(threshold_match.group(1) or threshold_match.group(2) or threshold_match.group(3) or 100)
