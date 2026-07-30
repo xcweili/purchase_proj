@@ -44,11 +44,13 @@ async def query_inventory_by_name(
         return f"未找到与「{name}」相关的库存记录"
 
     lines = [f"📦 **「{name}」库存查询结果**（共 {len(results)} 条）\n"]
+    lines.append("| 状态 | 物资名称 | 编码 | 库存 | 仓库 | 供应商 |")
+    lines.append("|------|----------|------|------|------|--------|")
     for item in results:
-        stock_icon = "🔴" if item["stock"] == 0 else ("🟡" if item["stock"] < 100 else "🟢")
+        status = "🔴" if item["stock"] == 0 else ("🟡" if item["stock"] < 100 else "🟢")
         lines.append(
-            f"{stock_icon} **{item['material_name']}**（{item['material_code']}）\n"
-            f"   └ 库存: {item['stock']} {item['unit']} | 仓库: {item['warehouse']} | 供应商: {item['supplier']}"
+            f"| {status} | {item['material_name']} | {item['material_code']} "
+            f"| {item['stock']}{item['unit']} | {item['warehouse']} | {item['supplier']} |"
         )
 
     lines.append(f"\n📅 查询时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")

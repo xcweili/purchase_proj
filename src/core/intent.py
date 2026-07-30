@@ -110,13 +110,40 @@ class KeywordMatcher:
             text: 用户输入
             intent_name: 意图名
             patterns: [(关键词, 参数名, 参数类型), ...]
+
+        Returns:
+            参数提取成功返回 IntentResult，否则返回 None（交给 LLM 兜底）
         """
         for keyword, param_name, _ in patterns:
             if keyword not in text:
                 continue
-            # 尝试从文本中提取参数值（冒号/空格后的内容）
-            match = re.search(rf'{re.escape(keyword)}\s*[:：]?\s*(\S+)', text)
-            param_value = match.group(1) if match else ""
+            # 尝试提取参数值——支持两种语序：
+            #   1. "查一下碳钢钢板的库存" → 匹配"库存"前的"碳钢钢板"
+            #   2. "查一下碳钢钢板库存"   → 匹配"库存"前的"碳钢钢板"
+            #   3. "库存碳钢钢板"         → 匹配"库存"后的"碳钢钢板"
+
+            # 优先匹配关键词前面文字（中文中物资名称通常在"库存"前面）
+            match = re.search(rf'(\S+?)\s*的?\s*{re.escape(keyword)}', text)
+            if not match:
+                match = re.search(rf'{re.escape(keyword)}\s*[:：]?\s*(\S+)', text)
+
+            param_value = match.group(1).strip('，。、；：！？,.;:!?') if match and match.group(1) else ""
+
+            # ----- 过滤无效参数 -----
+            # 1) 空值或单字符
+            if not param_value or len(param_value) <= 1:
+                logger.debug("关键词[%s]命中但参数过短(=%s)，交给 LLM", keyword, param_value)
+                continue
+
+            # 2) 包含停用词（时间、疑问、语气等，不是物资名的一部分）
+            stop_words = {"现在", "目前", "当前", "今天", "请问", "查询",
+                          "查一下", "我要查", "多少", "几个", "所有", "全部",
+                          "怎么", "如何", "什么", "这个", "那个", "在", "还",
+                          "只", "有"}
+            if any(sw in param_value for sw in stop_words):
+                logger.debug("关键词[%s]命中但参数含停用词(%s)，交给 LLM", keyword, param_value)
+                continue
+
             logger.info("关键词+参数命中: [%s] %s=%s", intent_name, param_name, param_value)
             return IntentResult(
                 intent_name=intent_name,

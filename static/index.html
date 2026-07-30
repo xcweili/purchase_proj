@@ -832,6 +832,22 @@ async function sendStream(text) {
         scrollToBottom();
         break;
 
+      case 'ask_params':
+        content = data.content || '';
+        if (!bodyEl) {
+          bodyEl = document.createElement('div');
+          bodyEl.className = 'msg-body';
+          contentWrap.appendChild(bodyEl);
+        }
+        bodyEl.innerHTML = marked.parse(content);
+        // 在 body 上加个标记，通知用户需要补充信息
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:11px;color:var(--gray-400);margin-top:4px;';
+        hint.textContent = '💡 请在输入框中补充以上信息';
+        contentWrap.appendChild(hint);
+        scrollToBottom();
+        break;
+
       case 'error':
         if (!bodyEl) {
           bodyEl = document.createElement('div');

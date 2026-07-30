@@ -21,11 +21,13 @@ class ToolInfo:
         description: str,
         func: Callable,
         args_schema: Optional[type[BaseModel]] = None,
+        required_params: Optional[list[str]] = None,
     ):
         self.name = name
         self.description = description
         self.func = func
         self.args_schema = args_schema
+        self.required_params = required_params or []
 
     def to_llm_description(self) -> dict:
         """转换为 LLM tool 描述格式"""
@@ -80,11 +82,17 @@ class ToolRegistry:
         def decorator(func: Callable) -> Callable:
             tool_name = name or func.__name__
             schema = args_schema or self._infer_schema(func)
+            # 从 schema 提取必填参数（无默认值的字段）
+            required_params = []
+            if schema:
+                schema_json = schema.model_json_schema()
+                required_params = schema_json.get("required", [])
             self._tools[tool_name] = ToolInfo(
                 name=tool_name,
                 description=description or func.__doc__ or "",
                 func=func,
                 args_schema=schema,
+                required_params=required_params,
             )
             params_info = ", ".join(schema.model_fields.keys()) if schema else "无参数"
             logger.info("工具已注册: [%s] %s | 参数: %s", tool_name, description, params_info)
@@ -122,6 +130,26 @@ class ToolRegistry:
         """获取已注册的工具"""
         return self._tools.get(name)
 
+    def get_required_params(self, name: str) -> list[str]:
+        """获取工具的必填参数列表"""
+        tool = self.get_tool(name)
+        if not tool:
+            return []
+        return tool.required_params
+
+    def check_missing_params(self, name: str, params: dict) -> list[str]:
+        """检查哪些必填参数缺失
+
+        Args:
+            name: 工具名
+            params: 已提供的参数字典
+
+        Returns:
+            缺失的必填参数名列表（空列表表示全部齐全）
+        """
+        required = self.get_required_params(name)
+        return [p for p in required if p not in params or params[p] in (None, "", [])]
+
     def list_tools(self) -> list[dict]:
         """列出所有已注册的工具（LLM 格式）"""
         return [info.to_llm_description() for info in self._tools.values()]
@@ -133,11 +161,11 @@ class ToolRegistry:
             for info in self._tools.values()
         ]
 
-    async def execute(self, name: str, **kwargs) -> Any:
+    async def execute(self, tool_name: str, **kwargs) -> Any:
         """执行已注册的工具（自动处理同步/异步函数）"""
-        tool = self.get_tool(name)
+        tool = self.get_tool(tool_name)
         if not tool:
-            raise ValueError(f"未找到工具: {name}")
+            raise ValueError(f"未找到工具: {tool_name}")
         result = tool.func(**kwargs)
         if result is not None and hasattr(result, "__await__"):
             result = await result
