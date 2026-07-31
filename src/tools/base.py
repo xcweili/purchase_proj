@@ -11,6 +11,7 @@ def tool(
     name: Optional[str] = None,
     description: str = "",
     args_schema: Optional[type[BaseModel]] = None,
+    hidden: bool = False,
 ):
     """快捷工具装饰器（注册到全局 registry）
 
@@ -19,8 +20,12 @@ def tool(
         def greet(name: str):
             \"\"\"向某人打招呼\"\"\"
             return f"你好, {name}!"
+
+        @tool(description="内部执行", hidden=True)
+        async def _internal(x: int):
+            ...
     """
-    return tool_registry.register(name=name, description=description, args_schema=args_schema)
+    return tool_registry.register(name=name, description=description, args_schema=args_schema, hidden=hidden)
 
 
 class BaseTool:

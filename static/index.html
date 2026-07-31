@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>采购智能助手</title>
+<title>采购智能助手 · LangGraph</title>
 <script src="https://cdn.jsdelivr.net/npm/marked@5/marked.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,6 +23,8 @@
     --gray-800: #1f2937;
     --gray-900: #111827;
     --red-400: #f87171;
+    --green-600: #059669;
+    --amber-600: #d97706;
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
     --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
     --shadow-lg: 0 4px 6px rgba(0,0,0,0.07), 0 10px 15px rgba(0,0,0,0.1);
@@ -42,9 +44,9 @@
 
   .app {
     width: 100%;
-    max-width: 800px;
+    max-width: 860px;
     height: 100vh;
-    max-height: 800px;
+    max-height: 860px;
     background: #fff;
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
@@ -89,510 +91,224 @@
     font-weight: 500;
   }
 
-  .toolbar-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+  .toolbar-actions { display: flex; align-items: center; gap: 8px; }
 
   .stream-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--gray-600);
-    cursor: pointer;
-    user-select: none;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--gray-600); cursor: pointer; user-select: none;
   }
 
   .stream-toggle input[type="checkbox"] {
-    appearance: none;
-    width: 32px;
-    height: 18px;
-    background: var(--gray-300);
-    border-radius: 9px;
-    position: relative;
-    cursor: pointer;
-    transition: background 0.2s;
-    flex-shrink: 0;
+    appearance: none; width: 32px; height: 18px; background: var(--gray-300);
+    border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; flex-shrink: 0;
   }
-
   .stream-toggle input[type="checkbox"]::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform 0.2s;
-    box-shadow: var(--shadow-sm);
+    content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    background: #fff; border-radius: 50%; transition: transform 0.2s; box-shadow: var(--shadow-sm);
   }
-
   .stream-toggle input[type="checkbox"]:checked { background: var(--primary); }
   .stream-toggle input[type="checkbox"]:checked::after { transform: translateX(14px); }
 
-  .btn-clear, .btn-tools {
-    background: none;
-    border: 1px solid var(--gray-200);
-    padding: 5px 10px;
-    border-radius: var(--radius);
-    font-size: 12px;
-    color: var(--gray-600);
-    cursor: pointer;
-    transition: all 0.15s;
+  .btn-clear, .btn-tools, .btn-runs {
+    background: none; border: 1px solid var(--gray-200); padding: 5px 10px;
+    border-radius: var(--radius); font-size: 12px; color: var(--gray-600); cursor: pointer; transition: all 0.15s;
   }
-
   .btn-clear:hover { background: var(--gray-50); color: var(--red-400); border-color: var(--red-400); }
-  .btn-tools:hover { background: var(--gray-50); color: var(--primary); border-color: var(--primary); }
-  .btn-tools.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+  .btn-tools:hover, .btn-runs:hover { background: var(--gray-50); color: var(--primary); border-color: var(--primary); }
+  .btn-tools.active, .btn-runs.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
 
-  /* ===== 工具面板 ===== */
-  .tools-panel {
-    background: var(--gray-50);
-    border-bottom: 1px solid var(--gray-200);
-    padding: 0 16px;
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease, padding 0.3s ease;
-    flex-shrink: 0;
+  /* ===== 工具/历史面板 ===== */
+  .tools-panel, .runs-panel {
+    background: var(--gray-50); border-bottom: 1px solid var(--gray-200); padding: 0 16px;
+    max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; flex-shrink: 0;
   }
-
-  .tools-panel.open {
-    max-height: 300px;
-    padding: 12px 16px;
-    overflow-y: auto;
-  }
-
-  .tools-panel-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--gray-500);
-    margin-bottom: 8px;
-  }
-
-  .tools-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-  }
-
-  @media (max-width: 500px) {
-    .tools-grid { grid-template-columns: 1fr; }
-  }
-
+  .tools-panel.open, .runs-panel.open { max-height: 300px; padding: 12px 16px; overflow-y: auto; }
+  .tools-panel-title { font-size: 12px; font-weight: 600; color: var(--gray-500); margin-bottom: 8px; }
+  .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  @media (max-width: 500px) { .tools-grid { grid-template-columns: 1fr; } }
   .tool-chip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: #fff;
-    border: 1px solid var(--gray-200);
-    border-radius: var(--radius);
-    font-size: 12px;
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: #fff;
+    border: 1px solid var(--gray-200); border-radius: var(--radius); font-size: 12px;
   }
+  .tool-chip .tool-name { font-weight: 600; color: var(--primary); font-family: monospace; font-size: 11px; }
+  .tool-chip .tool-desc { color: var(--gray-500); font-size: 11px; line-height: 1.4; word-break: break-all; }
 
-  .tool-chip .tool-name {
-    font-weight: 600;
-    color: var(--primary);
-    font-family: monospace;
-    font-size: 11px;
+  .run-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #fff;
+    border: 1px solid var(--gray-200); border-radius: var(--radius); margin-bottom: 6px;
+    cursor: pointer; font-size: 12px; transition: border-color 0.15s;
   }
-
-  .tool-chip .tool-desc {
-    color: var(--gray-500);
-    font-size: 11px;
-    line-height: 1.4;
-    word-break: break-all;
-  }
+  .run-item:hover { border-color: var(--primary); }
+  .run-item .run-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-item .run-status { font-size: 11px; }
 
   /* ===== 消息区域 ===== */
   .messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;
     background: var(--gray-50);
   }
+  .messages:empty { justify-content: center; align-items: center; }
+  .messages:empty::after { content: '发送消息开始对话'; color: var(--gray-400); font-size: 14px; }
 
-  .messages:empty {
-    justify-content: center;
-    align-items: center;
-  }
-
-  .messages:empty::after {
-    content: '发送消息开始对话';
-    color: var(--gray-400);
-    font-size: 14px;
-  }
-
-  .msg {
-    display: flex;
-    gap: 10px;
-    max-width: 88%;
-    animation: msgIn 0.25s ease-out;
-  }
-
-  @keyframes msgIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
+  .msg { display: flex; gap: 10px; max-width: 92%; animation: msgIn 0.25s ease-out; }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   .msg.user { align-self: flex-end; flex-direction: row-reverse; }
   .msg.assistant { align-self: flex-start; }
 
   .msg-avatar {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 13px;
-    flex-shrink: 0;
-    margin-top: 2px;
+    width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 13px; flex-shrink: 0; margin-top: 2px;
   }
-
   .msg.user .msg-avatar { background: var(--primary); color: #fff; }
   .msg.assistant .msg-avatar { background: #fff; color: var(--primary); border: 1px solid var(--gray-200); }
 
-  /* 助手消息容器：上下结构 */
-  .msg-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 0;
-  }
+  .msg-content { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
 
   .msg-body {
-    background: #fff;
-    padding: 10px 14px;
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
-    line-height: 1.65;
-    font-size: 14px;
-    word-break: break-word;
+    background: #fff; padding: 10px 14px; border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm); line-height: 1.65; font-size: 14px; word-break: break-word;
   }
+  .msg.user .msg-body { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.assistant .msg-body { border-bottom-left-radius: 4px; }
 
-  .msg.user .msg-body {
-    background: var(--primary);
-    color: #fff;
-    border-bottom-right-radius: 4px;
-  }
-
-  .msg.assistant .msg-body {
-    border-bottom-left-radius: 4px;
-  }
-
-  /* Markdown 样式 */
   .msg-body h1, .msg-body h2, .msg-body h3 { margin: 10px 0 6px; font-weight: 600; }
-  .msg-body h1 { font-size: 17px; }
-  .msg-body h2 { font-size: 15px; }
-  .msg-body h3 { font-size: 14px; }
-  .msg-body p { margin-bottom: 6px; }
-  .msg-body p:last-child { margin-bottom: 0; }
+  .msg-body h1 { font-size: 17px; } .msg-body h2 { font-size: 15px; } .msg-body h3 { font-size: 14px; }
+  .msg-body p { margin-bottom: 6px; } .msg-body p:last-child { margin-bottom: 0; }
   .msg-body ul, .msg-body ol { padding-left: 20px; margin: 4px 0; }
   .msg-body li { margin: 2px 0; }
-  .msg-body code {
-    background: var(--gray-100);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: 13px;
-    font-family: 'SF Mono', 'Fira Code', monospace;
-  }
-  .msg-body pre {
-    background: #1e293b;
-    color: #e2e8f0;
-    padding: 12px;
-    border-radius: var(--radius);
-    overflow-x: auto;
-    margin: 8px 0;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  .msg-body pre code {
-    background: none;
-    color: inherit;
-    padding: 0;
-    font-size: inherit;
-  }
-  .msg-body strong { font-weight: 600; }
-  .msg-body a { color: var(--primary); text-decoration: none; }
-  .msg-body a:hover { text-decoration: underline; }
+  .msg-body code { background: var(--gray-100); padding: 1px 5px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .msg-body pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: var(--radius); overflow-x: auto; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+  .msg-body pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
   .msg-body table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
   .msg-body table td { padding: 5px 8px; border-bottom: 1px solid var(--gray-200); vertical-align: top; }
   .msg-body table td:first-child { font-weight: 500; color: var(--gray-600); white-space: nowrap; width: 26%; }
   .msg-body table tr:last-child td { border-bottom: none; }
   .msg-body table td strong { color: var(--gray-900); }
 
-  /* 加载动画 */
-  .msg-loading .msg-body {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 14px 18px;
-  }
-
-  .msg-loading .dot {
-    width: 8px;
-    height: 8px;
-    background: var(--gray-400);
-    border-radius: 50%;
-    animation: bounce 1.4s infinite ease-in-out both;
-  }
-
+  .msg-loading .msg-body { display: flex; align-items: center; gap: 6px; padding: 14px 18px; }
+  .msg-loading .dot { width: 8px; height: 8px; background: var(--gray-400); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
   .msg-loading .dot:nth-child(1) { animation-delay: -0.32s; }
   .msg-loading .dot:nth-child(2) { animation-delay: -0.16s; }
   .msg-loading .dot:nth-child(3) { animation-delay: 0s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); } 40% { transform: scale(1); } }
 
-  @keyframes bounce {
-    0%, 80%, 100% { transform: scale(0.6); }
-    40% { transform: scale(1); }
-  }
-
-  /* ===== 思考过程（展开/收起） ===== */
-  .thinking-box {
-    background: var(--gray-50);
-    border: 1px solid var(--gray-200);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-
-  .thinking-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 5px 10px;
-    cursor: pointer;
-    font-size: 12px;
-    color: var(--gray-500);
-    user-select: none;
-    transition: background 0.15s;
-  }
-
+  /* ===== 思考过程 ===== */
+  .thinking-box { background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: var(--radius); overflow: hidden; }
+  .thinking-header { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; cursor: pointer; font-size: 12px; color: var(--gray-500); user-select: none; transition: background 0.15s; }
   .thinking-header:hover { background: var(--gray-100); }
   .thinking-header .label { display: flex; align-items: center; gap: 4px; }
   .thinking-header .arrow { transition: transform 0.2s; font-size: 10px; }
   .thinking-header .arrow.open { transform: rotate(90deg); }
-
-  .thinking-content {
-    padding: 0 10px 6px;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--gray-600);
-    display: none;
-  }
-
+  .thinking-content { padding: 0 10px 6px; font-size: 13px; line-height: 1.5; color: var(--gray-600); display: none; }
   .thinking-content.open { display: block; }
-
-  .thinking-content .thought-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    padding: 2px 0;
-  }
-
-  .thinking-content .thought-item .tag {
-    font-size: 11px;
-    background: var(--gray-200);
-    padding: 1px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-    color: var(--gray-600);
-    flex-shrink: 0;
-    margin-top: 2px;
-  }
-
+  .thinking-content .thought-item { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; }
+  .thinking-content .thought-item .tag { font-size: 11px; background: var(--gray-200); padding: 1px 6px; border-radius: 4px; white-space: nowrap; color: var(--gray-600); flex-shrink: 0; margin-top: 2px; }
   .thinking-content .thought-item .tag.intent { background: var(--primary-bg); color: var(--primary); }
-  .thinking-content .thought-item .tag.confidence { background: #ecfdf5; color: #059669; }
+  .thinking-content .thought-item .tag.confidence { background: #ecfdf5; color: var(--green-600); }
   .thinking-content .thought-item .tag.error { background: #fef2f2; color: #dc2626; }
 
+  /* ===== 执行计划面板 ===== */
+  .plan-box { border: 1px solid var(--gray-200); border-radius: var(--radius); overflow: hidden; background: #fff; }
+  .plan-header {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: var(--gray-800); user-select: none; background: var(--gray-50);
+  }
+  .plan-header .arrow { transition: transform 0.2s; font-size: 10px; }
+  .plan-header.open .arrow { transform: rotate(90deg); }
+  .plan-header .run-tag { font-size: 10px; font-family: monospace; color: var(--gray-400); }
+  .plan-header .plan-status { margin-left: auto; font-size: 11px; font-weight: 500; }
+  .plan-header .plan-actions { display: flex; gap: 4px; }
+  .plan-steps { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+  .plan-box.open .plan-steps { max-height: 560px; overflow-y: auto; }
+
+  .plan-step { border-top: 1px solid var(--gray-100); }
+  .plan-step-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; transition: background 0.15s; }
+  .plan-step-head:hover { background: var(--gray-50); }
+  .plan-step-head .arrow { font-size: 9px; color: var(--gray-400); transition: transform 0.2s; }
+  .plan-step.open .plan-step-head .arrow { transform: rotate(90deg); }
+  .step-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+  .step-status.pending { background: var(--gray-100); color: var(--gray-500); }
+  .step-status.running { background: var(--primary-bg); color: var(--primary); }
+  .step-status.completed { background: #ecfdf5; color: var(--green-600); }
+  .step-status.failed { background: #fef2f2; color: #dc2626; }
+  .step-status.interrupted { background: #fff7ed; color: var(--amber-600); }
+  .step-status.awaiting_confirm { background: #fffbeb; color: #b45309; }
+  .step-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step-tool { font-family: monospace; font-size: 10px; color: var(--gray-400); flex-shrink: 0; }
+  .step-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .step-btn {
+    background: none; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px;
+    color: var(--gray-500); cursor: pointer; padding: 2px 6px; transition: all 0.15s;
+  }
+  .step-btn:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-bg); }
+  .step-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .step-detail { display: none; padding: 0 12px 10px 48px; font-size: 12px; color: var(--gray-600); line-height: 1.6; }
+  .plan-step.open .step-detail { display: block; }
+  .step-detail .detail-row { margin-bottom: 4px; }
+  .step-detail .detail-label { color: var(--gray-400); font-size: 11px; margin-right: 6px; }
+  .step-detail pre { background: var(--gray-50); padding: 6px 8px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; word-break: break-all; font-family: 'SF Mono', monospace; }
+
+  .spinner {
+    display: inline-block; width: 10px; height: 10px; border: 2px solid var(--primary-bg);
+    border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* ===== 输入区域 ===== */
-  .input-area {
-    padding: 12px 16px;
-    border-top: 1px solid var(--gray-200);
-    background: #fff;
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
+  .input-area { padding: 12px 16px; border-top: 1px solid var(--gray-200); background: #fff; display: flex; gap: 8px; flex-shrink: 0; }
   .input-area textarea {
-    flex: 1;
-    border: 1px solid var(--gray-200);
-    border-radius: var(--radius);
-    padding: 8px 12px;
-    font-size: 14px;
-    font-family: inherit;
-    resize: none;
-    outline: none;
-    line-height: 1.5;
-    max-height: 100px;
-    transition: border-color 0.15s;
+    flex: 1; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 8px 12px;
+    font-size: 14px; font-family: inherit; resize: none; outline: none; line-height: 1.5; max-height: 100px; transition: border-color 0.15s;
   }
-
-  .input-area textarea:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-  }
-
+  .input-area textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
   .input-area textarea::placeholder { color: var(--gray-400); }
-
   .btn-send {
-    background: var(--primary);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius);
-    padding: 0 16px;
-    font-size: 14px;
-    cursor: pointer;
-    transition: background 0.15s, transform 0.1s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    flex-shrink: 0;
-    min-width: 64px;
+    background: var(--primary); color: #fff; border: none; border-radius: var(--radius); padding: 0 16px;
+    font-size: 14px; cursor: pointer; transition: background 0.15s, transform 0.1s; display: flex; align-items: center; justify-content: center; gap: 4px; flex-shrink: 0; min-width: 64px;
   }
-
   .btn-send:hover { background: var(--primary-light); }
   .btn-send:active { transform: scale(0.97); }
   .btn-send:disabled { background: var(--gray-300); cursor: not-allowed; transform: none; }
 
-  .msg.error .msg-body {
-    background: #fef2f2;
-    color: #dc2626;
-    border: 1px solid #fecaca;
-  }
+  .msg.error .msg-body { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 
-  /* ===== 确认对话框 ===== */
-  .confirm-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.35);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s ease-out;
+  /* ===== 对话框 ===== */
+  .overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.35);
+    display: flex; align-items: center; justify-content: center; z-index: 1000; animation: fadeIn 0.2s ease-out;
   }
-
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-  .confirm-dialog {
-    background: #fff;
-    border-radius: var(--radius-lg);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-    max-width: 520px;
-    width: 90%;
-    max-height: 80vh;
-    overflow-y: auto;
-    animation: slideUp 0.25s ease-out;
+  .dialog {
+    background: #fff; border-radius: var(--radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    max-width: 540px; width: 90%; max-height: 80vh; overflow-y: auto; animation: slideUp 0.25s ease-out;
   }
-
   @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-
-  .confirm-header {
-    padding: 16px 20px 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--gray-900);
+  .dialog-header { padding: 16px 20px 0; font-size: 15px; font-weight: 600; color: var(--gray-900); }
+  .dialog-body { padding: 12px 20px; font-size: 14px; line-height: 1.6; color: var(--gray-700); }
+  .dialog-body .msg-body { background: var(--gray-50); padding: 12px 16px; border-radius: var(--radius); margin: 0; box-shadow: none; }
+  .dialog-body table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .dialog-body table th, .dialog-body table td { padding: 5px 8px; border-bottom: 1px solid var(--gray-200); vertical-align: top; text-align: left; }
+  .dialog-body table th { font-weight: 600; color: var(--gray-700); background: var(--gray-50); font-size: 12px; }
+  .dialog-body table td:first-child { font-weight: 500; color: var(--gray-600); white-space: nowrap; width: 28%; }
+  .dialog-body table tr:last-child td, .dialog-body table tr:last-child th { border-bottom: none; }
+  .dialog-body table td strong { color: var(--gray-900); }
+  .dialog-actions { display: flex; gap: 8px; padding: 0 20px 16px; justify-content: flex-end; }
+  .dialog-actions button {
+    padding: 8px 20px; border-radius: var(--radius); border: 1px solid var(--gray-200);
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s;
   }
-
-  .confirm-body {
-    padding: 12px 20px;
-    font-size: 14px;
-    line-height: 1.6;
-    color: var(--gray-700);
+  .dialog-actions .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .dialog-actions .btn-primary:hover { background: var(--primary-light); }
+  .dialog-actions .btn-ghost { background: #fff; color: var(--gray-600); }
+  .dialog-actions .btn-ghost:hover { background: var(--gray-50); border-color: var(--gray-300); }
+  .dialog-loading { text-align: center; padding: 20px; color: var(--gray-500); font-size: 14px; }
+  .param-field { margin-bottom: 10px; }
+  .param-field label { display: block; font-size: 12px; color: var(--gray-600); margin-bottom: 4px; }
+  .param-field input {
+    width: 100%; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 7px 10px;
+    font-size: 14px; outline: none; transition: border-color 0.15s;
   }
-
-  .confirm-body .msg-body {
-    background: var(--gray-50);
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    margin: 0;
-    box-shadow: none;
-  }
-
-  .confirm-body table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-
-  .confirm-body table th,
-  .confirm-body table td {
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--gray-200);
-    vertical-align: top;
-    text-align: left;
-  }
-
-  .confirm-body table th {
-    font-weight: 600;
-    color: var(--gray-700);
-    background: var(--gray-50);
-    font-size: 12px;
-    text-transform: uppercase;
-  }
-
-  .confirm-body table td:first-child {
-    font-weight: 500;
-    color: var(--gray-600);
-    white-space: nowrap;
-    width: 28%;
-  }
-
-  .confirm-body table tr:last-child td,
-  .confirm-body table tr:last-child th {
-    border-bottom: none;
-  }
-
-  .confirm-body table td strong {
-    color: var(--gray-900);
-  }
-
-  .confirm-actions {
-    display: flex;
-    gap: 8px;
-    padding: 0 20px 16px;
-    justify-content: flex-end;
-  }
-
-  .confirm-actions button {
-    padding: 8px 20px;
-    border-radius: var(--radius);
-    border: 1px solid var(--gray-200);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .confirm-actions .btn-confirm {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-  }
-
-  .confirm-actions .btn-confirm:hover { background: var(--primary-light); }
-
-  .confirm-actions .btn-cancel {
-    background: #fff;
-    color: var(--gray-600);
-  }
-
-  .confirm-actions .btn-cancel:hover { background: var(--gray-50); border-color: var(--gray-300); }
-
-  .confirm-loading {
-    text-align: center;
-    padding: 20px;
-    color: var(--gray-500);
-    font-size: 14px;
-  }
+  .param-field input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
 </style>
 </head>
 <body>
@@ -602,16 +318,23 @@
   <div class="toolbar">
     <div class="toolbar-title">
       <span>🤖 采购智能助手</span>
-      <span class="badge">LangChain</span>
+      <span class="badge">LangGraph</span>
     </div>
     <div class="toolbar-actions">
       <label class="stream-toggle">
         <span>流式</span>
         <input type="checkbox" id="streamToggle" checked>
       </label>
+      <button class="btn-runs" id="runsToggleBtn">🕘 历史</button>
       <button class="btn-tools" id="toolsToggleBtn">📋 工具</button>
       <button class="btn-clear" id="clearBtn" title="清除历史记录">✕ 清除</button>
     </div>
+  </div>
+
+  <!-- 历史面板 -->
+  <div class="runs-panel" id="runsPanel">
+    <div class="tools-panel-title">🕘 运行历史（点击查看计划与步骤状态）</div>
+    <div id="runsList"></div>
   </div>
 
   <!-- 工具面板 -->
@@ -631,11 +354,20 @@
   </div>
 
   <!-- 确认对话框 -->
-  <div class="confirm-overlay" id="confirmOverlay" style="display:none;" onclick="closeConfirm(event)">
-    <div class="confirm-dialog" onclick="event.stopPropagation()">
-      <div class="confirm-header">📋 操作确认</div>
-      <div class="confirm-body" id="confirmBody"></div>
-      <div class="confirm-actions" id="confirmActions"></div>
+  <div class="overlay" id="confirmOverlay" style="display:none;" onclick="closeOverlay(event, 'confirmOverlay')">
+    <div class="dialog" onclick="event.stopPropagation()">
+      <div class="dialog-header">📋 操作确认</div>
+      <div class="dialog-body" id="confirmBody"></div>
+      <div class="dialog-actions" id="confirmActions"></div>
+    </div>
+  </div>
+
+  <!-- 参数补齐对话框 -->
+  <div class="overlay" id="paramsOverlay" style="display:none;" onclick="closeOverlay(event, 'paramsOverlay')">
+    <div class="dialog" onclick="event.stopPropagation()">
+      <div class="dialog-header">💡 补充信息</div>
+      <div class="dialog-body" id="paramsBody"></div>
+      <div class="dialog-actions" id="paramsActions"></div>
     </div>
   </div>
 </div>
@@ -650,6 +382,15 @@ const state = {
   isLoading: false,
   loadingMsgEl: null,
   abortController: null,
+  // 当前运行 / 计划
+  currentRunId: null,
+  planBox: null,
+  planSteps: {},          // seq -> {head, statusEl, detailEl, resultEl, rewindBtn, replayBtn, open}
+  currentMsgEl: null,
+  contentWrap: null,
+  bodyEl: null,
+  content: '',
+  pendingConfirmRun: null,
 };
 
 const messagesEl = document.getElementById('messages');
@@ -660,29 +401,33 @@ const streamToggle = document.getElementById('streamToggle');
 const toolsToggleBtn = document.getElementById('toolsToggleBtn');
 const toolsPanel = document.getElementById('toolsPanel');
 const toolsGrid = document.getElementById('toolsGrid');
-
-// 确认对话框元素
+const runsToggleBtn = document.getElementById('runsToggleBtn');
+const runsPanel = document.getElementById('runsPanel');
+const runsList = document.getElementById('runsList');
 const confirmOverlay = document.getElementById('confirmOverlay');
 const confirmBody = document.getElementById('confirmBody');
 const confirmActions = document.getElementById('confirmActions');
-let currentConfirmId = null;
+const paramsOverlay = document.getElementById('paramsOverlay');
+const paramsBody = document.getElementById('paramsBody');
+const paramsActions = document.getElementById('paramsActions');
 
 // 初始化
 streamToggle.addEventListener('change', () => { state.isStreaming = streamToggle.checked; });
 clearBtn.addEventListener('click', clearHistory);
-
-// 工具面板切换
-let toolsOpen = false;
+runsToggleBtn.addEventListener('click', async () => {
+  const open = runsPanel.classList.toggle('open');
+  runsToggleBtn.classList.toggle('active', open);
+  if (open) await loadRuns();
+});
 toolsToggleBtn.addEventListener('click', async () => {
-  toolsOpen = !toolsOpen;
-  toolsPanel.classList.toggle('open', toolsOpen);
-  toolsToggleBtn.classList.toggle('active', toolsOpen);
-  if (toolsOpen && toolsGrid.children.length === 0) {
-    await loadTools();
-  }
+  const open = toolsPanel.classList.toggle('open');
+  toolsToggleBtn.classList.toggle('active', open);
+  if (open && toolsGrid.children.length === 0) await loadTools();
 });
 
-// ===== 加载工具列表 =====
+// ============================================
+// 加载工具 / 历史
+// ============================================
 async function loadTools() {
   try {
     const resp = await fetch('/api/tools');
@@ -699,10 +444,64 @@ async function loadTools() {
   }
 }
 
-// ===== 辅助 =====
+async function loadRuns() {
+  try {
+    const resp = await fetch('/api/runs');
+    const data = await resp.json();
+    runsList.innerHTML = '';
+    const runs = data.runs || [];
+    if (runs.length === 0) {
+      runsList.innerHTML = '<div style="color:var(--gray-400);font-size:12px;">暂无运行记录</div>';
+      return;
+    }
+    const statusCn = { created: '已创建', running: '执行中', interrupted: '已中断', completed: '已完成', failed: '失败', stopped: '已停止' };
+    for (const r of runs) {
+      const item = document.createElement('div');
+      item.className = 'run-item';
+      item.innerHTML = `
+        <span class="run-text">${escapeHtml(r.user_input || '(无输入)')}</span>
+        <span class="run-status step-status ${escapeHtml(r.status || '')}">${escapeHtml(statusCn[r.status] || r.status)}</span>`;
+      item.onclick = () => viewRunDetail(r.run_id);
+      runsList.appendChild(item);
+    }
+  } catch (e) {
+    runsList.innerHTML = '<div style="color:var(--red-400);font-size:12px;">加载失败</div>';
+  }
+}
+
+// 查看历史运行：在消息区渲染计划面板（只读）
+async function viewRunDetail(runId) {
+  try {
+    const resp = await fetch('/api/runs/' + runId);
+    const detail = await resp.json();
+    if (detail.error) { addError('运行不存在'); return; }
+    addMessage('user', detail.user_input || '(历史记录)');
+    const msgDiv = addMessage('assistant', '', null, true);
+    const plan = renderPlan(detail.plan.steps || [], detail.plan.summary, detail.run_id, detail.status, true);
+    msgDiv.querySelector('.msg-content').prepend(plan);
+    // 填充已持久化的步骤状态
+    for (const s of detail.steps || []) {
+      updateStepStatus(s.seq, s.status, s.result, s.error);
+    }
+    if (detail.status === 'interrupted') {
+      const waiting = (detail.steps || []).find(s => s.status === 'awaiting_confirm');
+      if (waiting) {
+        showConfirmDialog({ run_id: detail.run_id, question: waiting.result || '需要人工确认', options: [{value:'confirm',label:'✅ 确认'},{value:'cancel',label:'❌ 取消'}] });
+      }
+    }
+    runsPanel.classList.remove('open');
+    runsToggleBtn.classList.remove('active');
+  } catch (e) {
+    addError('加载运行详情失败: ' + e.message);
+  }
+}
+
+// ============================================
+// 辅助
+// ============================================
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text == null ? '' : String(text);
   return div.innerHTML;
 }
 
@@ -712,33 +511,35 @@ function autoResize() {
 }
 inputBox.addEventListener('input', autoResize);
 
-// ===== 消息渲染 =====
-function addMessage(role, content, thinkingData = null) {
+function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+const STEP_STATUS_CN = {
+  pending: '待执行', running: '执行中', completed: '已完成', failed: '失败',
+  interrupted: '已中断', awaiting_confirm: '待确认',
+};
+const RUN_STATUS_CN = {
+  created: '已创建', running: '执行中', interrupted: '已中断', completed: '已完成', failed: '失败', stopped: '已停止',
+};
+
+// ============================================
+// 消息渲染
+// ============================================
+function addMessage(role, content, thinkingData = null, silent = false) {
   const div = document.createElement('div');
   div.className = `msg ${role === 'user' ? 'user' : 'assistant'}`;
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
   avatar.textContent = role === 'user' ? '我' : '🤖';
-
   div.appendChild(avatar);
 
   if (role === 'assistant') {
-    // 助手消息：上下结构
     const contentWrap = document.createElement('div');
     contentWrap.className = 'msg-content';
-
-    // 思考过程（在上方）
-    if (thinkingData) {
-      contentWrap.appendChild(createThinkingBox(thinkingData));
-    }
-
-    // 回复正文（在下方）- Markdown 渲染
+    if (thinkingData) contentWrap.appendChild(createThinkingBox(thinkingData));
     const body = document.createElement('div');
     body.className = 'msg-body';
-    if (content) {
-      body.innerHTML = marked.parse(content);
-    }
+    if (content) body.innerHTML = marked.parse(content);
     contentWrap.appendChild(body);
     div.appendChild(contentWrap);
   } else {
@@ -793,11 +594,6 @@ function hideLoading() {
   }
 }
 
-function scrollToBottom() {
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-// ===== 思考过程 =====
 function createThinkingBox(data) {
   const box = document.createElement('div');
   box.className = 'thinking-box';
@@ -824,7 +620,7 @@ function createThinkingBox(data) {
   if (data.reasoning) {
     const item = document.createElement('div');
     item.className = 'thought-item';
-    item.innerHTML = `<span class="tag" style="flex-shrink:0;">推理</span> ${escapeHtml(data.reasoning)}`;
+    item.innerHTML = `<span class="tag">推理</span> ${escapeHtml(data.reasoning)}`;
     content.appendChild(item);
   }
 
@@ -838,7 +634,148 @@ function createThinkingBox(data) {
   return box;
 }
 
-// ===== 发送消息 =====
+// ============================================
+// 执行计划面板（常驻展示 + 折叠 + 状态更新）
+// ============================================
+function renderPlan(steps, summary, runId, runStatus, readonly = false) {
+  const box = document.createElement('div');
+  box.className = 'plan-box open';
+
+  const header = document.createElement('div');
+  header.className = 'plan-header open';
+  const runTag = document.createElement('span');
+  runTag.className = 'run-tag';
+  runTag.textContent = runId ? `#${runId.slice(4, 12)}` : '';
+  const title = document.createElement('span');
+  title.textContent = `📋 执行计划（${steps.length} 步）`;
+  const statusTag = document.createElement('span');
+  statusTag.className = 'plan-status';
+  statusTag.textContent = RUN_STATUS_CN[runStatus] || '执行中';
+  header.appendChild(runTag);
+  header.appendChild(title);
+  if (runId && !readonly) {
+    const actions = document.createElement('span');
+    actions.className = 'plan-actions';
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'step-btn';
+    stopBtn.textContent = '⏹ 停止';
+    stopBtn.title = '即时中断：请求停止执行';
+    stopBtn.onclick = (e) => { e.stopPropagation(); stopRun(runId); };
+    actions.appendChild(stopBtn);
+    header.appendChild(actions);
+  }
+  header.appendChild(statusTag);
+
+  const arrow = document.createElement('span');
+  arrow.className = 'arrow';
+  arrow.textContent = '▶';
+  title.prepend(arrow);
+
+  header.addEventListener('click', () => {
+    const isOpen = box.classList.toggle('open');
+    header.classList.toggle('open', isOpen);
+  });
+
+  const stepsEl = document.createElement('div');
+  stepsEl.className = 'plan-steps';
+
+  state.planSteps = {};
+  for (const s of steps || []) {
+    const seq = s.seq;
+    const row = document.createElement('div');
+    row.className = 'plan-step';
+
+    const head = document.createElement('div');
+    head.className = 'plan-step-head';
+    head.innerHTML = `
+      <span class="arrow">▶</span>
+      <span class="step-status pending">待执行</span>
+      <span class="step-title">${escapeHtml(s.title || '')}</span>
+      <span class="step-tool">${escapeHtml(s.tool_name || '协调Agent')}</span>
+    `;
+
+    const actions = document.createElement('span');
+    actions.className = 'step-actions';
+    const rewindBtn = document.createElement('button');
+    rewindBtn.className = 'step-btn';
+    rewindBtn.textContent = '↺ 回溯';
+    rewindBtn.title = '从该步开始重新执行（原运行内回退）';
+    rewindBtn.onclick = (e) => { e.stopPropagation(); rewindStep(runId, seq); };
+    const replayBtn = document.createElement('button');
+    replayBtn.className = 'step-btn';
+    replayBtn.textContent = '⏮ 回放';
+    replayBtn.title = '从该步定点回放（克隆出新运行）';
+    replayBtn.onclick = (e) => { e.stopPropagation(); replayStep(runId, seq); };
+    if (readonly) { rewindBtn.disabled = true; replayBtn.disabled = true; }
+    actions.appendChild(rewindBtn);
+    actions.appendChild(replayBtn);
+    head.appendChild(actions);
+
+    const detail = document.createElement('div');
+    detail.className = 'step-detail';
+    const paramsHtml = s.params && Object.keys(s.params).length
+      ? `<div class="detail-row"><span class="detail-label">参数</span><pre>${escapeHtml(JSON.stringify(s.params, null, 2))}</pre></div>`
+      : '';
+    detail.innerHTML = `
+      ${paramsHtml}
+      <div class="detail-row"><span class="detail-label">说明</span>${escapeHtml(s.description || '')}</div>
+      <div class="detail-row"><span class="detail-label">结果</span><pre class="step-result-text">等待执行...</pre></div>
+    `;
+
+    row.appendChild(head);
+    row.appendChild(detail);
+    stepsEl.appendChild(row);
+
+    state.planSteps[seq] = {
+      row,
+      head,
+      statusEl: head.querySelector('.step-status'),
+      resultEl: detail.querySelector('.step-result-text'),
+      open: false,
+    };
+
+    head.addEventListener('click', () => {
+      const isOpen = row.classList.toggle('open');
+      head.querySelector('.arrow').classList.toggle('open', isOpen);
+      state.planSteps[seq].open = isOpen;
+    });
+  }
+
+  box.appendChild(header);
+  box.appendChild(stepsEl);
+  state.planBox = box;
+  return box;
+}
+
+function updateStepStatus(seq, status, result, error) {
+  const step = state.planSteps[seq];
+  if (!step) return;
+  step.statusEl.className = 'step-status ' + (status || 'pending');
+  step.statusEl.textContent = (status === 'running' ? '⟳ ' : '') + (STEP_STATUS_CN[status] || status);
+  if (status === 'running') {
+    step.statusEl.innerHTML = '<span class="spinner"></span> 执行中';
+  }
+  if (status === 'completed' && result) {
+    step.resultEl.textContent = result;
+  } else if (status === 'failed') {
+    step.resultEl.textContent = '❌ ' + (error || result || '执行失败');
+  } else if (status === 'interrupted') {
+    step.resultEl.textContent = result || '已中断';
+  } else if (status === 'awaiting_confirm') {
+    step.resultEl.textContent = result || '等待人工确认...';
+  }
+}
+
+function setRunStatus(status) {
+  const box = state.planBox;
+  if (!box) return;
+  const tag = box.querySelector('.plan-status');
+  if (tag) tag.textContent = RUN_STATUS_CN[status] || status;
+}
+
+// ============================================
+// 发送消息
+// ============================================
 async function sendMessage() {
   const text = inputBox.value.trim();
   if (!text || state.isLoading) return;
@@ -868,6 +805,7 @@ async function sendMessage() {
     hideLoading();
     state.isLoading = false;
     sendBtn.disabled = false;
+    inputBox.focus();
   }
 }
 
@@ -884,22 +822,41 @@ async function sendNonStream(text) {
 
   const thinkingData = { intent: data.intent, confidence: data.confidence, reasoning: data.reasoning };
 
-  // 需要人工确认
-  if (data._requires_confirm) {
-    // 先把问题文本作为消息展示（思考过程+内容）
+  // 非流式也渲染计划面板（展示计划总步数）
+  if (data.plan && data.plan.steps && data.plan.steps.length) {
+    state.currentRunId = data.run_id;
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'msg assistant';
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = '🤖';
+    msgDiv.appendChild(avatar);
+    const contentWrap = document.createElement('div');
+    contentWrap.className = 'msg-content';
+    contentWrap.appendChild(createThinkingBox(thinkingData));
+    contentWrap.appendChild(renderPlan(data.plan.steps, data.plan.summary, data.run_id, 'running', false));
+    if (data.result) {
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+      body.innerHTML = marked.parse(data.result);
+      contentWrap.appendChild(body);
+    }
+    msgDiv.appendChild(contentWrap);
+    messagesEl.appendChild(msgDiv);
+    scrollToBottom();
+    state.content = data.result || '';
+  } else {
     addMessage('assistant', data.result, thinkingData);
-    state.history.push({ role: 'assistant', content: data.result });
-    // 弹出确认对话框
+  }
+  state.history.push({ role: 'assistant', content: data.result || '' });
+
+  if (data._requires_confirm) {
     showConfirmDialog(data);
     return;
   }
-
   if (data.error) {
     addError(data.error);
     state.history.push({ role: 'assistant', content: data.error });
-  } else {
-    addMessage('assistant', data.result, thinkingData);
-    state.history.push({ role: 'assistant', content: data.result });
   }
 }
 
@@ -916,7 +873,7 @@ async function sendStream(text) {
 
   hideLoading();
 
-  // 创建空助手消息（上下结构容器）
+  // 创建空助手消息
   const msgDiv = document.createElement('div');
   msgDiv.className = 'msg assistant';
   const avatar = document.createElement('div');
@@ -927,10 +884,14 @@ async function sendStream(text) {
   contentWrap.className = 'msg-content';
   msgDiv.appendChild(contentWrap);
   messagesEl.appendChild(msgDiv);
+  scrollToBottom();
 
-  let bodyEl = null;
-  let content = '';
-  let thinkingData = null;
+  state.currentMsgEl = msgDiv;
+  state.contentWrap = contentWrap;
+  state.bodyEl = null;
+  state.content = '';
+  state.planBox = null;
+  state.planSteps = {};
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -956,79 +917,289 @@ async function sendStream(text) {
             handleEvent(eventType, data);
           } catch (e) {}
         }
-      } else if (line.startsWith('data: ')) {
-        try {
-          const data = JSON.parse(line.slice(6));
-          if (data.content !== undefined) {
-            content = data.content;
-            if (bodyEl) bodyEl.innerHTML = marked.parse(content);
-          }
-        } catch (e) {}
       }
       i++;
     }
   }
+}
 
-  function handleEvent(event, data) {
-    switch (event) {
-      case 'thinking_result':
-        thinkingData = { intent: data.intent, confidence: data.confidence, reasoning: data.reasoning };
-        // 思考框插入到 contentWrap 顶部
-        const tb = createThinkingBox(thinkingData);
-        contentWrap.prepend(tb);
-        break;
+function getBodyEl() {
+  if (!state.bodyEl) {
+    state.bodyEl = document.createElement('div');
+    state.bodyEl.className = 'msg-body';
+    state.contentWrap.appendChild(state.bodyEl);
+  }
+  return state.bodyEl;
+}
 
-      case 'tool_result':
-        content = data.content || '';
-        if (!bodyEl) {
-          bodyEl = document.createElement('div');
-          bodyEl.className = 'msg-body';
-          contentWrap.appendChild(bodyEl);
-        }
-        bodyEl.innerHTML = marked.parse(content);
-        scrollToBottom();
-        break;
+// ============================================
+// SSE 事件分发
+// ============================================
+function handleEvent(event, data) {
+  switch (event) {
+    case 'thinking_result': {
+      const tb = createThinkingBox({ intent: data.intent, confidence: data.confidence, reasoning: data.reasoning });
+      state.contentWrap.prepend(tb);
+      break;
+    }
 
-      case 'ask_params':
-        content = data.content || '';
-        if (!bodyEl) {
-          bodyEl = document.createElement('div');
-          bodyEl.className = 'msg-body';
-          contentWrap.appendChild(bodyEl);
-        }
-        bodyEl.innerHTML = marked.parse(content);
-        const hint = document.createElement('div');
-        hint.style.cssText = 'font-size:11px;color:var(--gray-400);margin-top:4px;';
-        hint.textContent = '💡 请在输入框中补充以上信息';
-        contentWrap.appendChild(hint);
-        scrollToBottom();
-        break;
+    case 'plan_created': {
+      state.currentRunId = data.run_id;
+      const plan = renderPlan(data.steps, data.summary, data.run_id, 'running', false);
+      // 计划面板置顶显示
+      state.contentWrap.prepend(plan);
+      scrollToBottom();
+      break;
+    }
 
-      case 'human_confirm':
-        // 显示确认对话框
-        showConfirmDialog(data);
-        break;
+    case 'plan_step_start':
+      updateStepStatus(data.seq, 'running');
+      break;
 
-      case 'error':
-        if (!bodyEl) {
-          bodyEl = document.createElement('div');
-          bodyEl.className = 'msg-body';
-          contentWrap.appendChild(bodyEl);
-        }
-        bodyEl.innerHTML = `⚠️ ${escapeHtml(data.content)}`;
-        bodyEl.style.color = '#dc2626';
-        break;
+    case 'plan_step_result':
+      updateStepStatus(data.seq, data.status, data.result, data.error);
+      break;
 
-      case 'done':
-        if (content) {
-          state.history.push({ role: 'assistant', content });
-        }
-        break;
+    case 'human_confirm':
+      showConfirmDialog(data);
+      break;
+
+    case 'ask_params':
+      showParamsDialog(data);
+      break;
+
+    case 'tool_result': {
+      state.content = data.content || '';
+      const body = getBodyEl();
+      body.innerHTML = marked.parse(state.content);
+      scrollToBottom();
+      break;
+    }
+
+    case 'run_paused':
+      setRunStatus('interrupted');
+      break;
+
+    case 'run_done':
+      setRunStatus(data.status);
+      break;
+
+    case 'error': {
+      const body = getBodyEl();
+      body.innerHTML = `⚠️ ${escapeHtml(data.content)}`;
+      body.style.color = '#dc2626';
+      break;
+    }
+
+    case 'done': {
+      if (state.content) {
+        state.history.push({ role: 'assistant', content: state.content });
+      }
+      if (data.status) setRunStatus(data.status);
+      break;
     }
   }
 }
 
-// ===== 清除 =====
+// ============================================
+// 人工确认对话框
+// ============================================
+function showConfirmDialog(data) {
+  const runId = data.run_id;
+  if (runId) state.pendingConfirmRun = runId;
+  confirmBody.innerHTML = '<div class="msg-body">' + marked.parse(data.question || '需要人工确认') + '</div>';
+
+  confirmActions.innerHTML = '';
+  const options = data.options || [
+    { value: 'confirm', label: '✅ 确认' },
+    { value: 'cancel', label: '❌ 取消' },
+  ];
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.textContent = opt.label;
+    btn.className = opt.value === 'confirm' || opt.value === 'yes' ? 'btn-primary' : 'btn-ghost';
+    btn.onclick = () => handleConfirmChoice(opt.value, runId);
+    confirmActions.appendChild(btn);
+  }
+  confirmOverlay.style.display = 'flex';
+}
+
+async function handleConfirmChoice(choice, runId) {
+  runId = runId || state.pendingConfirmRun || state.currentRunId;
+  if (!runId) return;
+  confirmActions.innerHTML = '<div class="dialog-loading">⏳ 正在处理...</div>';
+  try {
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: choice }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+    confirmOverlay.style.display = 'none';
+
+    // 刷新计划面板（从恢复后的步骤状态）
+    await refreshPlan(runId);
+
+    if (result.result && !result.error) {
+      addMessage('assistant', result.result);
+      state.history.push({ role: 'assistant', content: result.result });
+      state.content = result.result;
+    }
+    if (result.error) addError(result.error);
+  } catch (err) {
+    confirmActions.innerHTML = `<div style="color:#dc2626;font-size:13px;">请求失败: ${err.message}</div>`;
+  }
+}
+
+// ============================================
+// 参数补齐对话框
+// ============================================
+function showParamsDialog(data) {
+  const runId = data.run_id;
+  if (runId) state.pendingConfirmRun = runId;
+  paramsBody.innerHTML = `<div style="font-size:13px;margin-bottom:12px;">${escapeHtml(data.question || '请补充信息')}</div>`;
+
+  const fields = (data.missing || []).map(p => {
+    const wrap = document.createElement('div');
+    wrap.className = 'param-field';
+    wrap.innerHTML = `<label>${escapeHtml(p)}</label><input data-param="${escapeHtml(p)}" placeholder="请输入 ${escapeHtml(p)}">`;
+    return wrap;
+  });
+  fields.forEach(f => paramsBody.appendChild(f));
+
+  paramsActions.innerHTML = '';
+  const cancel = document.createElement('button');
+  cancel.textContent = '取消';
+  cancel.className = 'btn-ghost';
+  cancel.onclick = () => { paramsOverlay.style.display = 'none'; };
+  const submit = document.createElement('button');
+  submit.textContent = '提交';
+  submit.className = 'btn-primary';
+  submit.onclick = () => handleParamsSubmit(runId);
+  paramsActions.appendChild(cancel);
+  paramsActions.appendChild(submit);
+
+  paramsOverlay.style.display = 'flex';
+  paramsBody.querySelector('input')?.focus();
+}
+
+async function handleParamsSubmit(runId) {
+  runId = runId || state.pendingConfirmRun || state.currentRunId;
+  if (!runId) return;
+  const values = {};
+  let missing = false;
+  paramsBody.querySelectorAll('input[data-param]').forEach(input => {
+    if (!input.value.trim()) missing = true;
+    values[input.dataset.param] = input.value.trim();
+  });
+  if (missing) {
+    paramsActions.innerHTML = '<div style="color:#dc2626;font-size:12px;">请填写所有字段</div>';
+    setTimeout(() => paramsActions.innerHTML = '', 2000);
+    return;
+  }
+  paramsActions.innerHTML = '<div class="dialog-loading">⏳ 正在执行...</div>';
+  try {
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: values }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+    paramsOverlay.style.display = 'none';
+    await refreshPlan(runId);
+    if (result.result && !result.error) {
+      addMessage('assistant', result.result);
+      state.history.push({ role: 'assistant', content: result.result });
+      state.content = result.result;
+    }
+    if (result.error) addError(result.error);
+  } catch (err) {
+    paramsActions.innerHTML = `<div style="color:#dc2626;font-size:13px;">请求失败: ${err.message}</div>`;
+  }
+}
+
+// ============================================
+// 回溯 / 定点回放 / 停止
+// ============================================
+async function rewindStep(runId, seq) {
+  if (!runId) return;
+  if (state.isLoading) return;
+  await runRestart(runId, seq, 'rewind');
+}
+
+async function replayStep(runId, seq) {
+  if (!runId) return;
+  if (state.isLoading) return;
+  await runRestart(runId, seq, 'replay');
+}
+
+async function runRestart(runId, seq, kind) {
+  state.isLoading = true;
+  sendBtn.disabled = true;
+  try {
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/${kind}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_seq: seq }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+
+    // 新 run 记录展示
+    const msgDiv = addMessage('assistant', '', null, true);
+    const box = renderPlan(result.steps || [], '', result.run_id, result.status, false);
+    msgDiv.querySelector('.msg-content').prepend(box);
+    for (const s of result.steps || []) updateStepStatus(s.seq, s.status, s.result, s.error);
+
+    if (result.error) {
+      addError(result.error);
+    } else if (result.result && result.status !== 'interrupted') {
+      addMessage('assistant', result.result);
+      state.history.push({ role: 'assistant', content: result.result });
+      state.content = result.result;
+    } else if (result.status === 'interrupted') {
+      // 再次中断：找到待确认步骤并弹出对话框
+      const waiting = (result.steps || []).find(s => s.status === 'awaiting_confirm');
+      if (waiting) {
+        showConfirmDialog({ run_id: result.run_id, question: waiting.result || '需要人工确认', options: [{value:'confirm',label:'✅ 确认'},{value:'cancel',label:'❌ 取消'}] });
+      }
+    }
+  } catch (e) {
+    addError(`${kind === 'rewind' ? '回溯' : '回放'}失败: ${e.message}`);
+  } finally {
+    state.isLoading = false;
+    sendBtn.disabled = false;
+  }
+}
+
+async function stopRun(runId) {
+  if (!runId) return;
+  try {
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
+    state.abortController?.abort();
+    setRunStatus('stopped');
+  } catch (e) {}
+}
+
+// 从后端刷新计划面板状态
+async function refreshPlan(runId) {
+  try {
+    const resp = await fetch('/api/runs/' + runId);
+    const detail = await resp.json();
+    if (detail.error) return;
+    // 若当前计划面板属于该 run，则刷新状态
+    if (state.planBox && state.currentRunId === runId) {
+      setRunStatus(detail.status);
+      for (const s of detail.steps || []) updateStepStatus(s.seq, s.status, s.result, s.error);
+    }
+  } catch (e) {}
+}
+
+// ============================================
+// 清除
+// ============================================
 function clearHistory() {
   if (state.isLoading) {
     state.abortController?.abort();
@@ -1039,72 +1210,17 @@ function clearHistory() {
   state.history = [];
   messagesEl.innerHTML = '';
   confirmOverlay.style.display = 'none';
-  currentConfirmId = null;
+  paramsOverlay.style.display = 'none';
+  state.pendingConfirmRun = null;
+  state.planBox = null;
+  state.planSteps = {};
   inputBox.focus();
 }
 
-// ===== Human-in-the-Loop 确认对话框 =====
-function showConfirmDialog(data) {
-  currentConfirmId = data.confirm_id;
-  // 用 msg-body 包裹，与主消息区保持一致的 markdown 渲染
-  confirmBody.innerHTML = '<div class="msg-body">' + marked.parse(data.question) + '</div>';
-
-  confirmActions.innerHTML = '';
-  const options = data.options || [
-    { value: 'confirm', label: '✅ 确认' },
-    { value: 'cancel', label: '❌ 取消' },
-  ];
-
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.textContent = opt.label;
-    btn.className = opt.value === 'confirm' || opt.value === 'yes' ? 'btn-confirm' : 'btn-cancel';
-    btn.onclick = () => handleConfirmChoice(opt.value);
-    confirmActions.appendChild(btn);
-  }
-
-  confirmOverlay.style.display = 'flex';
-}
-
-function closeConfirm(event) {
-  if (event && event.target !== confirmOverlay) return;
-  confirmOverlay.style.display = 'none';
-}
-
-async function handleConfirmChoice(choice) {
-  if (!currentConfirmId) return;
-
-  // 显示加载状态
-  confirmActions.innerHTML = '<div class="confirm-loading">⏳ 正在处理...</div>';
-
-  try {
-    const resp = await fetch('/api/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm_id: currentConfirmId, choice }),
-    });
-
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const result = await resp.json();
-
-    confirmOverlay.style.display = 'none';
-    currentConfirmId = null;
-
-    // 显示处理结果到消息区域
-    addMessage('assistant', result.result || result.error || '未知结果');
-
-    if (result.result && !result.error) {
-      state.history.push({ role: 'assistant', content: result.result });
-    }
-  } catch (err) {
-    confirmActions.innerHTML = `<div style="color:#dc2626;font-size:13px;">请求失败: ${err.message}</div>`;
-    // 保留关闭按钮
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '关闭';
-    closeBtn.className = 'btn-cancel';
-    closeBtn.onclick = () => { confirmOverlay.style.display = 'none'; };
-    confirmActions.appendChild(closeBtn);
-  }
+function closeOverlay(event, id) {
+  const el = document.getElementById(id);
+  if (event.target !== el) return;
+  el.style.display = 'none';
 }
 </script>
 

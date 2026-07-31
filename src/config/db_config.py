@@ -7,6 +7,10 @@ from typing import Dict
 # SQLite配置
 SQLITE_DB_PATH = 'purchase_management.db'
 
+# 智能体运行时数据库（SQLite）
+# 用于持久化 运行记录/计划步骤/事件日志/检查点，支撑 计划展示、回溯、定点回放
+AGENT_SQLITE_DB_PATH = 'agent_runtime.db'
+
 # 数据库类型枚举
 DB_TYPE_SQLITE = 'sqlite'
 DB_TYPE_MYSQL = 'mysql'
@@ -104,3 +108,13 @@ def set_db_type(db_type: str) -> bool:
         CURRENT_DB_TYPE = db_type
         return True
     return False
+
+
+def get_agent_db_path() -> str:
+    """
+    获取智能体运行时数据库（SQLite）的文件路径
+
+    该数据库用于持久化：运行记录、计划步骤、事件日志以及 LangGraph 检查点，
+    是 计划展示 / 回溯 / 定点回放 / 中断恢复 的数据底座。
+    """
+    return AGENT_SQLITE_DB_PATH

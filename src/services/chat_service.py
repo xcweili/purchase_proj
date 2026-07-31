@@ -1,287 +1,435 @@
 # -*- coding: utf-8 -*-
 """
-对话服务
-封装 Agent，提供工具注册、对话处理和**多轮参数补齐**能力
+对话服务（LangGraph 版）
+
+执行链路（每次执行 Agent 前必先理解意图、再列计划、逐步骤执行）：
+    用户输入 → 意图识别 → 计划生成（plan_created）→ 逐步骤执行（plan_step_start /
+    plan_step_result 实时推送）→ 协调汇总（tool_result）→ done
+
+能力：
+- 计划列表：plan_created 推送全部步骤，每步状态通过 SSE 实时更新（前端常驻展示、可折叠）
+- 即时中断：HITL 确认 / 参数追问通过 LangGraph interrupt 挂起，前端选择后 resume 恢复
+- 回溯    ：rewind_run 从指定步骤重新执行（原运行内回退）
+- 定点回放：replay_run 从指定步骤克隆出新的运行重新执行（原运行保留）
+- 多 Agent：规划 Agent + 执行 Agent + 协调 Agent 接力（见 src/core/agents.py）
 """
+import asyncio
 import json
 import logging
+import uuid
 from typing import Any, AsyncGenerator, Optional
 
-from src.core.agent import Agent
-from src.tools.base import tool
+from src.core.graph import GraphRuntime
+from src.core.intent import IntentRecognizer
+from src.core.registry import tool_registry
+from src.db.store import (
+    run_store, RunStore,
+    RUN_RUNNING, RUN_INTERRUPTED, RUN_COMPLETED, RUN_FAILED, RUN_STOPPED,
+    STEP_COMPLETED,
+)
 
 # 导入独立工具模块（导入即触发 @tool 装饰器注册）
-import src.tools.inventory_tools
-import src.tools.purchase_tools
-import src.tools.approval_tools
+import src.tools.inventory_tools   # noqa: F401
+import src.tools.purchase_tools    # noqa: F401
+import src.tools.approval_tools    # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 
-class ChatService:
-    """对话服务
+def _sse(event: str, data: Any = None) -> str:
+    return f"event: {event}\ndata: {json.dumps(data or {}, ensure_ascii=False)}\n\n"
 
-    负责：
-    1. 初始化 Agent
-    2. 注册业务工具
-    3. 处理用户对话（流式/非流式）
-    4. 多轮参数补齐 — 当工具必填参数缺失时，追问用户并自动补齐
-    """
+
+class ChatService:
+    """对话服务：意图识别 + 计划编排 + LangGraph 执行 + 回溯/回放/恢复"""
 
     def __init__(self):
-        self.agent: Agent | None = None
-        # 多轮参数补齐状态
-        self._pending_intent: Optional[str] = None
-        self._pending_missing: list[str] = []
-        self._pending_params: dict = {}
-        # 人工确认状态
-        self._pending_confirm: Optional[dict] = None
+        self.runtime: Optional[GraphRuntime] = None
+        self.recognizer: Optional[IntentRecognizer] = None
+        self.store: RunStore = run_store
 
-    def initialize(self):
-        """初始化 Agent 并注册默认工具"""
-        logger.info("=" * 40)
-        logger.info("开始初始化 ChatService...")
-        self.agent = Agent()
-        logger.info("Agent 实例创建完成，开始注册工具...")
-        self._register_builtin_tools()
-        self.agent.refresh_recognizer()
-        logger.info("ChatService 初始化完成")
+    # ============================================
+    # 初始化
+    # ============================================
+    async def initialize(self):
+        """初始化（工具注册 + 意图识别器 + LangGraph 运行时）"""
+        tools_desc = self._build_tools_description()
+        self.recognizer = IntentRecognizer(tools_desc)
+        self.runtime = GraphRuntime(store=self.store)
+        await self.runtime.initialize()
+        logger.info("ChatService(LangGraph) 初始化完成，共 %d 个工具", len(tool_registry.list_tools_simple()))
 
-    def _register_builtin_tools(self):
-        """注册内置工具"""
-        logger.info("注册内置工具...")
-
-        @self.agent.register_tool(description="向用户打招呼")
-        def greet(name: str = "朋友"):
-            """向用户打招呼"""
-            return f"你好，{name}！我是采购智能助手，有什么可以帮你的？"
-
-        @self.agent.register_tool(description="获取当前时间")
-        def get_current_time():
-            """获取当前日期和时间"""
-            from datetime import datetime
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        logger.info("内置工具注册完成")
+    def _build_tools_description(self) -> str:
+        tools = tool_registry.list_tools_simple()
+        if not tools:
+            return "当前没有可用的工具。"
+        return "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
 
     def get_available_tools(self) -> list[dict]:
-        """获取可用工具列表"""
-        if not self.agent:
-            return []
-        return self.agent.get_tool_list()
+        return tool_registry.list_tools_simple()
 
-    def clear_pending(self):
-        """清除所有待办状态"""
-        self._pending_intent = None
-        self._pending_missing = []
-        self._pending_params = {}
-        self._pending_confirm = None
-        logger.debug("待办状态已清除")
+    # ============================================
+    # 事件发射器（SSE 队列 + 事件日志落库）
+    # ============================================
+    def _make_emitter(self, run_id: str, queue: Optional[asyncio.Queue]):
+        async def emit(event_type: str, data: dict):
+            try:
+                self.store.append_event(run_id, event_type, data)
+            except Exception:
+                logger.debug("事件落库失败: %s", event_type)
+            if queue is not None:
+                await queue.put({"event": event_type, "data": data})
+        return emit
 
-    async def confirm_action(self, confirm_id: str, choice: str) -> dict:
-        """处理人工确认/取消
+    async def _emit_to_queue(self, queue: asyncio.Queue, event: str, data: dict):
+        await queue.put({"event": event, "data": data})
 
-        Args:
-            confirm_id: 确认会话 ID
-            choice: 用户的选择值（如 "confirm" / "cancel"）
+    # ============================================
+    # 核心事件流
+    # ============================================
+    async def _stream_events(
+        self, user_input: str, history: Optional[list] = None
+    ) -> AsyncGenerator[tuple[str, dict], None]:
+        """意图理解 → 计划 → 执行 的完整事件流（(event, data) 元组）"""
+        if not self.runtime or not self.recognizer:
+            yield ("error", {"content": "服务未初始化"})
+            yield ("done", {"status": "error"})
+            return
 
-        Returns:
-            执行结果（确认后执行 / 取消提示）
-        """
-        if not self._pending_confirm:
-            return {"result": "没有待处理的确认请求", "error": "no_pending"}
+        # ---- 1. 意图理解 ----
+        yield ("thinking_start", {"content": "正在理解意图..."})
+        intent = await self.recognizer.recognize_async(user_input, history=history)
+        yield ("thinking_result", {
+            "intent": intent.intent_name,
+            "confidence": intent.confidence,
+            "reasoning": intent.reasoning,
+            "parameters": intent.parameters,
+        })
 
-        if self._pending_confirm["confirm_id"] != confirm_id:
-            return {"result": "确认 ID 不匹配", "error": "id_mismatch"}
+        if intent.intent_name == "unknown" or intent.confidence < 0.3:
+            yield ("tool_result", {"content": self._build_uncertain_msg(user_input, intent.intent_name)})
+            yield ("done", {"status": "completed"})
+            return
 
-        if choice == "cancel":
-            self.clear_pending()
-            return {"result": "❌ 操作已取消", "error": None}
+        # ---- 2. 创建运行记录 ----
+        run = self.store.create_run(user_input, {
+            "intent_name": intent.intent_name,
+            "confidence": intent.confidence,
+        })
+        run_id, thread_id = run["run_id"], run["thread_id"]
+        self.store.update_run_intent(run_id, {
+            "intent_name": intent.intent_name,
+            "confidence": intent.confidence,
+        })
 
-        if choice != "confirm":
-            self.clear_pending()
-            return {"result": f"未知选择: {choice}", "error": "invalid_choice"}
-
-        # 用户确认 → 执行后续工具
-        if not self.agent:
-            self.clear_pending()
-            return {"result": "服务未初始化", "error": "not_initialized"}
+        # ---- 3. 图执行（后台任务，事件经队列推送） ----
+        queue: asyncio.Queue = asyncio.Queue()
+        emit = self._make_emitter(run_id, queue)
+        initial_state = {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "user_input": user_input,
+            "history": history or [],
+            "intent": {
+                "intent_name": intent.intent_name,
+                "confidence": intent.confidence,
+                "parameters": intent.parameters,
+                "reasoning": intent.reasoning,
+                "method": intent.method,
+            },
+        }
+        config = self.runtime.build_config(run_id, thread_id, emit)
+        task = asyncio.create_task(self._run_graph_task(initial_state, config, queue))
 
         try:
-            tool_name = self._pending_confirm["pending_tool"]
-            params = self._pending_confirm["pending_params"]
-            logger.info("人工确认后执行: [%s] 参数=%s", tool_name, params)
-            result = await self.agent.registry.execute(tool_name, **params)
-            self.clear_pending()
-            return {"result": str(result), "error": None}
+            while True:
+                item = await queue.get()
+                if item.get("event") == "__task_done__":
+                    break
+                yield (item["event"], item["data"])
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _run_graph_task(self, initial_state: dict, config: dict, queue: asyncio.Queue):
+        """后台执行 LangGraph，推送 run_paused / done / error"""
+        run_id = initial_state["run_id"]
+        try:
+            result = await self.runtime.invoke_graph(initial_state, config)
+            if result["interrupted"]:
+                self.store.update_run_status(run_id, RUN_INTERRUPTED)
+                await self._emit_to_queue(queue, "run_paused", {"run_id": run_id, "status": RUN_INTERRUPTED})
+                await self._emit_to_queue(queue, "done", {"run_id": run_id, "status": RUN_INTERRUPTED})
+            else:
+                run = self.store.get_run(run_id)
+                status = (run or {}).get("status", RUN_COMPLETED)
+                await self._emit_to_queue(queue, "done", {"run_id": run_id, "status": status})
+        except asyncio.CancelledError:
+            self.store.update_run_status(run_id, RUN_INTERRUPTED, error="已中断")
+            raise
         except Exception as e:
-            logger.exception("确认后执行失败")
-            self.clear_pending()
-            return {"result": f"执行失败: {str(e)}", "error": str(e)}
+            logger.exception("图执行异常: run=%s", run_id)
+            self.store.update_run_status(run_id, RUN_FAILED, error=str(e))
+            await self._emit_to_queue(queue, "error", {"content": f"执行异常: {str(e)}"})
+            await self._emit_to_queue(queue, "done", {"run_id": run_id, "status": RUN_FAILED})
+        finally:
+            await queue.put({"event": "__task_done__", "data": {}})
 
-    async def process(self, user_input: str, history: list | None = None) -> dict:
-        """非流式处理用户输入（支持 pending 补齐）"""
-        if not self.agent:
-            return {"intent": "unknown", "confidence": 0, "result": "", "error": "服务未初始化"}
-
-        # 如果有待办补齐，先处理补齐
-        if self._pending_intent:
-            logger.info("检测到待办补齐: [%s] 缺失=%s", self._pending_intent, self._pending_missing)
-            fill = await self.agent.fill_pending_params(
-                user_input=user_input,
-                intent_name=self._pending_intent,
-                missing_params=self._pending_missing,
-                partial_params=self._pending_params,
-            )
-            if fill["filled"]:
-                # 填充完毕后需要人工确认
-                if fill.get("_requires_confirm"):
-                    self._pending_confirm = {
-                        "confirm_id": fill["confirm_id"],
-                        "pending_tool": fill["pending_tool"],
-                        "pending_params": fill["pending_params"],
-                    }
-                    return {
-                        "intent": self._pending_intent,
-                        "confidence": 1.0,
-                        "result": fill["result"],
-                        "error": None,
-                        "reasoning": "多轮补齐后需要人工确认",
-                        "_requires_confirm": True,
-                        "confirm_id": fill["confirm_id"],
-                        "options": fill["options"],
-                    }
-
-                self.clear_pending()
-                return {
-                    "intent": self._pending_intent,
-                    "confidence": 1.0,
-                    "result": fill["result"],
-                    "error": None,
-                    "reasoning": "多轮补齐后执行工具",
-                }
-            else:
-                # 还没补齐，更新状态继续问
-                self._pending_params = fill["params"]
-                self._pending_missing = fill["still_missing"]
-                return {
-                    "intent": self._pending_intent,
-                    "confidence": 1.0,
-                    "result": fill["msg"],
-                    "error": None,
-                    "reasoning": "参数仍未补齐",
-                    "missing_params": fill["still_missing"],
-                    "pending_intent": self._pending_intent,
-                    "pending_params": fill["params"],
-                }
-
-        # 正常处理
-        result = await self.agent.process(user_input, history=history)
-
-        # 如果返回了 pending_intent，保存状态
-        if result.get("pending_intent"):
-            self._pending_intent = result["pending_intent"]
-            self._pending_missing = result.get("missing_params", [])
-            self._pending_params = result.get("pending_params", {})
-
-        # 如果返回了人工确认信号，保存待确认状态
-        if result.get("_requires_confirm"):
-            self._pending_confirm = {
-                "confirm_id": result["confirm_id"],
-                "pending_tool": result.get("pending_tool"),
-                "pending_params": result.get("pending_params"),
-            }
-            logger.info("保存待确认状态(非流式): confirm_id=%s", result["confirm_id"])
-
-        return result
-
+    # ============================================
+    # 流式 / 非流式对外接口
+    # ============================================
     async def process_stream(
-        self, user_input: str, history: list | None = None
+        self, user_input: str, history: Optional[list] = None
     ) -> AsyncGenerator[str, None]:
-        """流式处理用户输入（支持 pending 补齐）"""
-        if not self.agent:
-            yield f"event: error\ndata: {json.dumps({'content': '服务未初始化'}, ensure_ascii=False)}\n\n"
-            yield "event: done\ndata: {}\n\n"
-            return
+        async for event, data in self._stream_events(user_input, history):
+            yield _sse(event, data)
 
-        def _sse(event: str, data: Any = None) -> str:
-            return f"event: {event}\ndata: {json.dumps(data or {}, ensure_ascii=False)}\n\n"
+    async def process(self, user_input: str, history: Optional[list] = None) -> dict:
+        """非流式处理（收集事件后返回响应）"""
+        intent_name, confidence = "unknown", 0.0
+        result_text = ""
+        resp: dict = {"intent": "unknown", "confidence": 0, "result": "", "error": None}
 
-        # 如果有待办补齐，先处理补齐
-        if self._pending_intent:
-            logger.info("检测到待办补齐: [%s] 缺失=%s", self._pending_intent, self._pending_missing)
-            yield _sse("thinking_start", {"content": "正在提取补充信息..."})
-
-            fill = await self.agent.fill_pending_params(
-                user_input=user_input,
-                intent_name=self._pending_intent,
-                missing_params=self._pending_missing,
-                partial_params=self._pending_params,
-            )
-
-            if fill["filled"]:
-                # 填充完毕后需要人工确认
-                if fill.get("_requires_confirm"):
-                    confirm_data = {
-                        "confirm_id": fill["confirm_id"],
-                        "question": fill["result"],
-                        "options": fill["options"],
-                        "pending_tool": fill["pending_tool"],
-                        "pending_params": fill["pending_params"],
-                    }
-                    self._pending_confirm = {
-                        "confirm_id": fill["confirm_id"],
-                        "pending_tool": fill["pending_tool"],
-                        "pending_params": fill["pending_params"],
-                    }
-                    yield _sse("human_confirm", confirm_data)
-                else:
-                    self.clear_pending()
-                    yield _sse("tool_result", {"content": fill["result"]})
-            else:
-                self._pending_params = fill["params"]
-                self._pending_missing = fill["still_missing"]
-                yield _sse("ask_params", {
-                    "content": fill["msg"],
-                    "missing_params": fill["still_missing"],
-                    "pending_intent": self._pending_intent,
-                    "pending_params": fill["params"],
+        async for event, data in self._stream_events(user_input, history):
+            if event == "thinking_result":
+                intent_name = data.get("intent", "unknown")
+                confidence = data.get("confidence", 0)
+            elif event == "plan_created":
+                resp.update({
+                    "run_id": data.get("run_id"),
+                    "plan": {
+                        "summary": data.get("summary", ""),
+                        "steps": data.get("steps", []),
+                    },
                 })
+            elif event == "tool_result":
+                result_text = data.get("content", "")
+            elif event == "human_confirm":
+                resp.update({
+                    "_requires_confirm": True,
+                    "confirm_id": data.get("confirm_id"),
+                    "question": data.get("question"),
+                    "options": data.get("options"),
+                    "run_id": data.get("run_id"),
+                })
+            elif event == "ask_params":
+                resp.update({
+                    "ask_params": True,
+                    "question": data.get("question"),
+                    "missing_params": data.get("missing", []),
+                })
+            elif event == "error":
+                resp["error"] = data.get("content", "执行异常")
 
-            yield _sse("done", {})
-            return
+        resp.update({
+            "intent": intent_name,
+            "confidence": confidence,
+            "result": result_text,
+        })
+        return resp
 
-        # 正常流式处理
-        pending_intent = None
-        pending_missing = []
-        pending_params = {}
+    # ============================================
+    # 中断恢复（HITL 确认 / 参数补齐）
+    # ============================================
+    async def resume_run(self, run_id: str, value: Any) -> dict:
+        """恢复被中断的运行
 
-        async for event_str in self.agent.process_stream(user_input, history=history):
-            yield event_str
-            # 捕捉 ask_params → 保存 pending 补齐状态
-            if event_str.startswith("event: ask_params"):
-                import re
-                m = re.search(r'data: (\{.*\})', event_str)
-                if m:
-                    data = json.loads(m.group(1))
-                    pending_intent = data.get("pending_intent")
-                    pending_missing = data.get("missing_params", [])
-                    pending_params = data.get("pending_params", {})
-            # 捕捉 human_confirm → 保存 pending 确认状态
-            elif event_str.startswith("event: human_confirm"):
-                import re
-                m = re.search(r'data: (\{.*\})', event_str)
-                if m:
-                    data = json.loads(m.group(1))
-                    self._pending_confirm = {
-                        "confirm_id": data["confirm_id"],
-                        "pending_tool": data["pending_tool"],
-                        "pending_params": data["pending_params"],
-                    }
-                    logger.info("保存待确认状态: confirm_id=%s", data["confirm_id"])
+        Args:
+            run_id: 运行 ID
+            value: 用户的选择（"confirm"/"cancel"）或补齐的参数 dict
+        """
+        run = self.store.get_run(run_id)
+        if not run:
+            return {"result": "运行不存在", "error": "run_not_found"}
+        if not self.runtime:
+            return {"result": "服务未初始化", "error": "not_initialized"}
 
-        # 保存 pending 状态
-        if pending_intent:
-            self._pending_intent = pending_intent
-            self._pending_missing = pending_missing
-            self._pending_params = pending_params
+        thread_id = run.get("thread_id") or ("thread_" + uuid.uuid4().hex[:12])
+        if not run.get("thread_id"):
+            self.store.set_thread_id(run_id, thread_id)
+
+        self.store.clear_stop(run_id)
+        self.store.update_run_status(run_id, RUN_RUNNING)
+        emit = self._make_emitter(run_id, None)
+        config = self.runtime.build_config(run_id, thread_id, emit)
+
+        try:
+            result = await self.runtime.resume_graph(config, value)
+            interrupted = result["interrupted"]
+            if interrupted:
+                self.store.update_run_status(run_id, RUN_INTERRUPTED)
+                return {
+                    "result": self._last_tool_result(run_id) or "已恢复执行，但仍有待确认项",
+                    "status": RUN_INTERRUPTED,
+                    "interrupted": True,
+                    "steps": self.store.get_steps(run_id),
+                }
+            run_now = self.store.get_run(run_id)
+            return {
+                "result": self._last_tool_result(run_id) or "执行完成",
+                "status": (run_now or {}).get("status", RUN_COMPLETED),
+                "steps": self.store.get_steps(run_id),
+            }
+        except Exception as e:
+            logger.exception("恢复执行失败: run=%s", run_id)
+            self.store.update_run_status(run_id, RUN_FAILED, error=str(e))
+            return {"result": f"恢复执行失败: {str(e)}", "error": str(e)}
+
+    # ============================================
+    # 回溯（rewind） / 定点回放（replay）
+    # ============================================
+    def _build_restart_state(self, run_id: str, target_seq: int,
+                             new_run_id: Optional[str] = None) -> tuple[dict, dict, str]:
+        """基于已持久化的运行快照，重建从 target_seq 重新执行的初始状态
+
+        Returns:
+            (initial_state, config, run_id_for_exec)
+        """
+        snapshot = self.store.get_run_snapshot(run_id)
+        plan = snapshot.get("plan") or {}
+        steps = plan.get("steps", [])
+        idx = next((i for i, s in enumerate(steps) if s.get("seq") == target_seq), 0)
+        if idx >= len(steps):
+            raise ValueError(f"目标步骤不存在: seq={target_seq}")
+
+        exec_run_id = new_run_id or run_id
+        if new_run_id:
+            # 定点回放：克隆计划到新运行，并保留目标步骤之前的已完成结果
+            self.store.save_plan(new_run_id, plan)
+            for s in snapshot.get("steps", []):
+                if s.get("seq") < target_seq and s.get("status") == STEP_COMPLETED and s.get("result"):
+                    self.store.mark_step(new_run_id, s["seq"], STEP_COMPLETED, result=s["result"])
+            self.store.reset_steps_from(new_run_id, target_seq)
+        else:
+            # 回溯：原运行内回退
+            self.store.reset_steps_from(run_id, target_seq)
+
+        # 目标步骤之前的结果（供协调 Agent / 后续步骤引用）
+        step_results = {}
+        for s in snapshot.get("steps", []):
+            if s.get("seq") < target_seq and s.get("status") == STEP_COMPLETED and s.get("result"):
+                step_results[str(s["seq"])] = s["result"]
+
+        thread_id = "thread_" + uuid.uuid4().hex[:12]
+        self.store.set_thread_id(exec_run_id, thread_id)
+        self.store.clear_stop(exec_run_id)
+        self.store.update_run_status(exec_run_id, RUN_RUNNING)
+
+        initial_state = {
+            "run_id": exec_run_id,
+            "thread_id": thread_id,
+            "user_input": snapshot.get("user_input", ""),
+            "history": [],
+            "intent": snapshot.get("intent", {}),
+            "plan": plan,
+            "step_results": step_results,
+            "current_index": idx,
+            "run_status": RUN_RUNNING,
+        }
+        return initial_state, thread_id, exec_run_id
+
+    async def rewind_run(self, run_id: str, target_seq: int) -> dict:
+        """回溯：从指定步骤在原运行内重新执行（该步骤之后的结果将被覆盖）"""
+        initial_state, thread_id, exec_run_id = self._build_restart_state(run_id, target_seq)
+        emit = self._make_emitter(exec_run_id, None)
+        config = self.runtime.build_config(exec_run_id, thread_id, emit)
+        result = await self.runtime.invoke_graph(initial_state, config)
+        if result["interrupted"]:
+            self.store.update_run_status(exec_run_id, RUN_INTERRUPTED)
+            status = RUN_INTERRUPTED
+        else:
+            status = (self.store.get_run(exec_run_id) or {}).get("status")
+        return {
+            "run_id": exec_run_id,
+            "status": status,
+            "steps": self.store.get_steps(exec_run_id),
+            "result": self._last_tool_result(exec_run_id) or "已从目标步骤重新执行",
+        }
+
+    async def replay_run(self, run_id: str, target_seq: int) -> dict:
+        """定点回放：从指定步骤克隆出新运行重新执行（原运行历史保留）"""
+        snapshot = self.store.get_run_snapshot(run_id)
+        new_run = self.store.create_run(snapshot.get("user_input", ""), snapshot.get("intent", {}))
+        new_run_id = new_run["run_id"]
+        initial_state, thread_id, _ = self._build_restart_state(run_id, target_seq, new_run_id=new_run_id)
+        emit = self._make_emitter(new_run_id, None)
+        config = self.runtime.build_config(new_run_id, thread_id, emit)
+        result = await self.runtime.invoke_graph(initial_state, config)
+        if result["interrupted"]:
+            self.store.update_run_status(new_run_id, RUN_INTERRUPTED)
+            status = RUN_INTERRUPTED
+        else:
+            status = (self.store.get_run(new_run_id) or {}).get("status")
+        return {
+            "run_id": new_run_id,
+            "status": status,
+            "steps": self.store.get_steps(new_run_id),
+            "result": self._last_tool_result(new_run_id) or "定点回放完成",
+        }
+
+    # ============================================
+    # 停止 / 查询
+    # ============================================
+    def _last_tool_result(self, run_id: str) -> str:
+        """从事件日志中提取最后一次 tool_result 内容（最终答复）"""
+        try:
+            events = self.store.get_events(run_id, limit=100)
+            for e in reversed(events):
+                if e.get("event_type") == "tool_result":
+                    return e.get("data", {}).get("content", "")
+        except Exception:
+            logger.debug("读取最终答复失败: %s", run_id)
+        return ""
+
+    def stop_run(self, run_id: str) -> dict:
+        """即时中断：请求停止（执行 Agent 在步骤边界检查该标记）"""
+        run = self.store.get_run(run_id)
+        if not run:
+            return {"result": "运行不存在", "error": "run_not_found"}
+        self.store.request_stop(run_id)
+        return {"result": "已请求停止，将在当前步骤结束后生效"}
+
+    def get_run_detail(self, run_id: str) -> Optional[dict]:
+        run = self.store.get_run(run_id)
+        if not run:
+            return None
+        return {
+            "run_id": run.get("run_id"),
+            "user_input": run.get("user_input"),
+            "intent": run.get("intent_name"),
+            "confidence": run.get("intent_confidence"),
+            "status": run.get("status"),
+            "error": run.get("error"),
+            "created_at": run.get("created_at"),
+            "updated_at": run.get("updated_at"),
+            "plan": json.loads(run.get("plan_json") or "{}"),
+            "steps": self.store.get_steps(run_id),
+        }
+
+    def list_runs(self, limit: int = 20) -> list[dict]:
+        return self.store.list_runs(limit)
+
+    # ============================================
+    # 工具
+    # ============================================
+    def _build_uncertain_msg(self, user_input: str, intent_name: str) -> str:
+        suggestions = []
+        if any(kw in user_input for kw in ["库存", "物资", "材料"]):
+            suggestions.append("查询库存")
+        if any(kw in user_input for kw in ["采购", "购买", "买", "进货"]):
+            suggestions.append("发起采购")
+        if any(kw in user_input for kw in ["订单", "订单编号", "PO"]):
+            suggestions.append("查询采购订单")
+        if not suggestions:
+            return (
+                "我没完全理解您的意思，请更具体地描述一下您想做什么？\n\n"
+                "例如：\n"
+                "- 查询某个物资的库存\n"
+                "- 发起采购申请\n"
+                "- 查询采购订单"
+            )
+        return f"您是想要 **{'、'.join(suggestions)}** 吗？请更具体地描述一下。"

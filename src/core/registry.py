@@ -22,12 +22,14 @@ class ToolInfo:
         func: Callable,
         args_schema: Optional[type[BaseModel]] = None,
         required_params: Optional[list[str]] = None,
+        hidden: bool = False,
     ):
         self.name = name
         self.description = description
         self.func = func
         self.args_schema = args_schema
         self.required_params = required_params or []
+        self.hidden = hidden
 
     def to_llm_description(self) -> dict:
         """转换为 LLM tool 描述格式"""
@@ -71,6 +73,7 @@ class ToolRegistry:
         name: Optional[str] = None,
         description: str = "",
         args_schema: Optional[type[BaseModel]] = None,
+        hidden: bool = False,
     ) -> Callable:
         """注册工具的装饰器
 
@@ -78,6 +81,7 @@ class ToolRegistry:
             name: 工具名称，默认使用函数名
             description: 工具描述
             args_schema: 参数 Pydantic 模型
+            hidden: 隐藏工具（不暴露给规划器/前端，仅供内部流程调用）
         """
         def decorator(func: Callable) -> Callable:
             tool_name = name or func.__name__
@@ -93,6 +97,7 @@ class ToolRegistry:
                 func=func,
                 args_schema=schema,
                 required_params=required_params,
+                hidden=hidden,
             )
             params_info = ", ".join(schema.model_fields.keys()) if schema else "无参数"
             logger.info("工具已注册: [%s] %s | 参数: %s", tool_name, description, params_info)
@@ -151,14 +156,15 @@ class ToolRegistry:
         return [p for p in required if p not in params or params[p] in (None, "", [])]
 
     def list_tools(self) -> list[dict]:
-        """列出所有已注册的工具（LLM 格式）"""
-        return [info.to_llm_description() for info in self._tools.values()]
+        """列出所有已注册的工具（LLM 格式，排除隐藏工具）"""
+        return [info.to_llm_description() for info in self._tools.values() if not info.hidden]
 
     def list_tools_simple(self) -> list[dict]:
-        """列出所有已注册的工具（简洁格式）"""
+        """列出所有已注册的工具（简洁格式，排除隐藏工具）"""
         return [
             {"name": info.name, "description": info.description}
             for info in self._tools.values()
+            if not info.hidden
         ]
 
     async def execute(self, tool_name: str, **kwargs) -> Any:

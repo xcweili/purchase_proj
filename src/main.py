@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 FastAPI 应用入口
-提供基于 LangChain Agent 的对话接口（流式/非流式）
+基于 LangGraph 的对话接口（流式/非流式）+ 运行管理（回溯/回放/恢复/停止）
 """
 import os
 import logging
@@ -28,8 +28,8 @@ chat_service = ChatService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    logger.info("应用启动 - 初始化 LangChain Agent...")
-    chat_service.initialize()
+    logger.info("应用启动 - 初始化 LangGraph Agent...")
+    await chat_service.initialize()
     tools = chat_service.get_available_tools()
     logger.info("Agent 初始化完成，共注册 %d 个工具:", len(tools))
     for t in tools:
@@ -40,8 +40,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="采购智能助手",
-    description="基于 LangChain 的采购管理智能助手（意图识别 + 工具调用）",
-    version="0.1.0",
+    description="基于 LangGraph 的采购管理智能助手（意图理解 → 计划编排 → 多Agent 协同执行）",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -57,6 +57,15 @@ class ChatRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     confirm_id: str
     choice: str
+    run_id: str | None = None
+
+
+class ResumeRequest(BaseModel):
+    value: str | dict | int | float | bool | None = None
+
+
+class RestartRequest(BaseModel):
+    target_seq: int
 
 
 class ChatResponse(BaseModel):
@@ -68,26 +77,13 @@ class ChatResponse(BaseModel):
 
 
 # ============================================
-# API 路由（优先于静态文件）
+# 对话接口
 # ============================================
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """对话接口 - 非流式"""
     result = await chat_service.process(request.message, history=request.history)
-    resp = {
-        "intent": result["intent"],
-        "confidence": result["confidence"],
-        "result": result.get("result") or "",
-        "error": result.get("error"),
-        "reasoning": result.get("reasoning", ""),
-    }
-    # 透传人工确认信号（非流式模式也需要对话框）
-    if result.get("_requires_confirm"):
-        resp["_requires_confirm"] = True
-        resp["confirm_id"] = result["confirm_id"]
-        resp["question"] = result.get("result", "")
-        resp["options"] = result.get("options", [])
-    return resp
+    return result
 
 
 @app.post("/api/chat/stream")
@@ -118,14 +114,54 @@ async def list_tools():
     return {"tools": chat_service.get_available_tools()}
 
 
+# ============================================
+# 运行管理（回溯 / 定点回放 / 中断恢复 / 停止）
+# ============================================
 @app.post("/api/confirm")
 async def confirm(request: ConfirmRequest):
-    """人工确认接口（HITL）"""
-    result = await chat_service.confirm_action(
-        confirm_id=request.confirm_id,
-        choice=request.choice,
-    )
-    return result
+    """人工确认接口（HITL），恢复被中断的 LangGraph 运行"""
+    if request.run_id:
+        return await chat_service.resume_run(request.run_id, request.choice)
+    return {"result": "缺少 run_id，无法恢复运行", "error": "missing_run_id"}
+
+
+@app.post("/api/runs/{run_id}/resume")
+async def resume_run(run_id: str, request: ResumeRequest):
+    """恢复被中断的运行（确认选择 / 补齐参数）"""
+    return await chat_service.resume_run(run_id, request.value)
+
+
+@app.post("/api/runs/{run_id}/rewind")
+async def rewind_run(run_id: str, request: RestartRequest):
+    """回溯：从指定步骤在原运行内重新执行"""
+    return await chat_service.rewind_run(run_id, request.target_seq)
+
+
+@app.post("/api/runs/{run_id}/replay")
+async def replay_run(run_id: str, request: RestartRequest):
+    """定点回放：从指定步骤克隆出新的运行重新执行（原运行保留）"""
+    return await chat_service.replay_run(run_id, request.target_seq)
+
+
+@app.post("/api/runs/{run_id}/stop")
+async def stop_run(run_id: str):
+    """即时中断：请求停止当前运行（在步骤边界生效）"""
+    return chat_service.stop_run(run_id)
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str):
+    """获取运行详情（计划 + 步骤状态）"""
+    detail = chat_service.get_run_detail(run_id)
+    if not detail:
+        return {"error": "run_not_found"}
+    return detail
+
+
+@app.get("/api/runs")
+async def list_runs():
+    """列出最近运行"""
+    return {"runs": chat_service.list_runs(20)}
 
 
 # ============================================

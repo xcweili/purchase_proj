@@ -74,6 +74,7 @@ async def batch_purchase(material: str, quantity: float, unit: str = "吨") -> d
     }
 
 
+@tool(description="内部工具：人工确认后的实际采购执行（不对外暴露，仅由系统在确认后调用）", hidden=True)
 async def _do_purchase(material: str, quantity: float, unit: str, total_amount: float) -> str:
     """确认后的实际采购执行（模拟）"""
     logger.info("执行采购: %s %s%s, 金额=¥%s", material, quantity, unit, total_amount)
