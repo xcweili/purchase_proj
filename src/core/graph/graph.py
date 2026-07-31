@@ -50,26 +50,54 @@ class GraphRuntime:
         self.conn: Optional[aiosqlite.Connection] = None
         self.checkpointer: Optional[AsyncSqliteSaver] = None
         self.graph = None
+        # 图执行器池：每个执行器拥有独立的 aiosqlite 连接 + AsyncSqliteSaver。
+        # 避免所有 run 共享单个连接——并发执行或任务被取消时会互相干扰（checkpoint 写挂起）
+        self._pool: list[dict] = []
 
     async def initialize(self):
         """构建图（幂等）"""
-        if self.graph is not None:
+        if self._pool:
             return
-        self.conn = await aiosqlite.connect(self.db_path)
-        self.checkpointer = AsyncSqliteSaver(self.conn)
-        await self.checkpointer.setup()
-        self.graph = self._build_graph()
+        await self._new_entry()
         logger.info("LangGraph 图构建完成（checkpointer: %s）", self.db_path)
 
+    async def _new_entry(self) -> dict:
+        """新建一个图执行器（独立连接 + 检查点）"""
+        # timeout=30：检查点与业务库（RunStore）并发写同一 db 时等待 30s，避免 database is locked
+        conn = await aiosqlite.connect(self.db_path, timeout=30)
+        checkpointer = AsyncSqliteSaver(conn)
+        await checkpointer.setup()
+        graph = self._build_graph(checkpointer)
+        entry = {"graph": graph, "conn": conn, "in_use": False}
+        self._pool.append(entry)
+        if self.graph is None:
+            self.graph = graph
+        logger.info("新建图执行器，当前池大小=%d", len(self._pool))
+        return entry
+
+    async def _acquire(self) -> dict:
+        """取一个空闲执行器；无空闲则新建"""
+        for e in self._pool:
+            if not e["in_use"]:
+                e["in_use"] = True
+                return e
+        e = await self._new_entry()
+        e["in_use"] = True
+        return e
+
+    def _release(self, entry: dict):
+        entry["in_use"] = False
+
     async def close(self):
-        if self.conn:
-            await self.conn.close()
-            self.conn = None
+        for e in self._pool:
+            await e["conn"].close()
+        self._pool = []
+        self.graph = None
 
     # ============================================
     # 图构建
     # ============================================
-    def _build_graph(self):
+    def _build_graph(self, checkpointer: AsyncSqliteSaver):
         g = StateGraph(GraphState)
         g.add_node("planner", self._planner_node)
         g.add_node("execute", self._execute_node)
@@ -86,7 +114,7 @@ class GraphRuntime:
             {"execute": "execute", "finalize": "finalize"},
         )
         g.add_edge("finalize", END)
-        return g.compile(checkpointer=self.checkpointer)
+        return g.compile(checkpointer=checkpointer)
 
     # ============================================
     # 节点
@@ -337,14 +365,27 @@ class GraphRuntime:
         Returns:
             {"state": 最终状态, "interrupted": 是否因人工确认而暂停}
         """
-        final = await self.graph.ainvoke(initial_state, config)
-        snap = await self.graph.aget_state(config)
-        interrupted = bool(snap and snap.next)
-        return {"state": final, "interrupted": interrupted}
+        entry = await self._acquire()
+        try:
+            graph = entry["graph"]
+            final = await graph.ainvoke(initial_state, config)
+            snap = await graph.aget_state(config)
+            interrupted = bool(snap and snap.next)
+            return {"state": final, "interrupted": interrupted}
+        finally:
+            self._release(entry)
 
     async def resume_graph(self, config: dict, choice: str) -> dict:
-        """恢复被中断的图（用户对确认框的选择）"""
-        final = await self.graph.ainvoke(Command(resume=choice), config)
-        snap = await self.graph.aget_state(config)
-        interrupted = bool(snap and snap.next)
-        return {"state": final, "interrupted": interrupted}
+        """恢复被中断的图（用户对确认框的选择）
+
+        注：检查点持久化在 db 中，恢复时可用池中任意空闲执行器读取。
+        """
+        entry = await self._acquire()
+        try:
+            graph = entry["graph"]
+            final = await graph.ainvoke(Command(resume=choice), config)
+            snap = await graph.aget_state(config)
+            interrupted = bool(snap and snap.next)
+            return {"state": final, "interrupted": interrupted}
+        finally:
+            self._release(entry)

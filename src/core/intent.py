@@ -49,6 +49,11 @@ INTENT_SYSTEM_PROMPT = """你是一个智能助手，负责识别用户意图并
 - 如果用户提出了全新的需求（话题改变），切换到新意图
 - 如果用户表达感谢、告别等社交用语，匹配到对应的社交工具
 
+## 多轮参数补充（重要）
+- 如果当前输入是对上一轮助手追问参数的补充（如助手问"请提供时区"，用户回答"东八区"），
+  应保持上一轮的意图，并把补充的值放入对应参数
+- 判定依据：结合 {history} 中助手最后一条消息的内容
+
 ## 示例
 用户: "帮我查一下碳钢钢板的库存"
 意图: query_inventory_by_name, 参数: {{"name": "碳钢钢板"}}
@@ -58,6 +63,13 @@ INTENT_SYSTEM_PROMPT = """你是一个智能助手，负责识别用户意图并
 
 用户: "你好"
 意图: greet, 参数: {{}}
+
+用户: "现在几点了"
+意图: get_current_time, 参数: {{}}
+
+历史: [用户:"现在几点了", 助手:"请提供您的时区"]
+用户: "东八区"
+意图: get_current_time, 参数: {{"timezone": "东八区"}}
 """
 
 
@@ -330,6 +342,20 @@ class IntentRecognizer:
         if result:
             return result
 
+        # 1a'. 纯时区补充 → get_current_time（多轮补参兜底，不依赖 LLM）
+        _tz = text.strip()
+        if (re.fullmatch(r'[东西]\d{1,2}区', _tz)
+                or re.fullmatch(r'(?:utc|gmt)\s*[+-]\d{1,2}', _tz)
+                or re.fullmatch(r'[+-]\d{1,2}(?::\d{2})?', _tz)):
+            logger.info("关键词命中: [get_current_time] 时区补充=%s", _tz)
+            return IntentResult(
+                intent_name="get_current_time",
+                confidence=0.9,
+                parameters={"timezone": user_input.strip()},
+                reasoning=f"用户补充时区「{user_input.strip()}」，延续时间查询意图",
+                method="keyword",
+            )
+
         # 1b. 采购相关 → batch_purchase
         purchase_patterns = [
             ("采购", "material", str),
@@ -396,6 +422,20 @@ class IntentRecognizer:
         result = keyword_matcher.match(text)
         if result:
             return result
+
+        # 1a'. 纯时区补充 → get_current_time（多轮补参兜底，不依赖 LLM）
+        _tz = text.strip()
+        if (re.fullmatch(r'[东西]\d{1,2}区', _tz)
+                or re.fullmatch(r'(?:utc|gmt)\s*[+-]\d{1,2}', _tz)
+                or re.fullmatch(r'[+-]\d{1,2}(?::\d{2})?', _tz)):
+            logger.info("关键词命中: [get_current_time] 时区补充=%s", _tz)
+            return IntentResult(
+                intent_name="get_current_time",
+                confidence=0.9,
+                parameters={"timezone": user_input.strip()},
+                reasoning=f"用户补充时区「{user_input.strip()}」，延续时间查询意图",
+                method="keyword",
+            )
 
         # 1b. 采购相关 → batch_purchase（带参数提取：物资名称 + 数量）
         purchase_patterns = [

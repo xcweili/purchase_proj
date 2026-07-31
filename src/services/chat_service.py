@@ -19,6 +19,7 @@ import logging
 import uuid
 from typing import Any, AsyncGenerator, Optional
 
+from src.config.db_config import get_agent_checkpoint_db_path
 from src.core.graph import GraphRuntime
 from src.core.intent import IntentRecognizer
 from src.core.registry import tool_registry
@@ -29,6 +30,7 @@ from src.db.store import (
 )
 
 # 导入独立工具模块（导入即触发 @tool 装饰器注册）
+import src.tools.simple_tools    # noqa: F401
 import src.tools.inventory_tools   # noqa: F401
 import src.tools.purchase_tools    # noqa: F401
 import src.tools.approval_tools    # noqa: F401
@@ -55,7 +57,11 @@ class ChatService:
         """初始化（工具注册 + 意图识别器 + LangGraph 运行时）"""
         tools_desc = self._build_tools_description()
         self.recognizer = IntentRecognizer(tools_desc)
-        self.runtime = GraphRuntime(store=self.store)
+        # 检查点独立 db（与业务库分离），避免并发写锁竞争
+        self.runtime = GraphRuntime(
+            store=self.store,
+            db_path=get_agent_checkpoint_db_path(),
+        )
         await self.runtime.initialize()
         logger.info("ChatService(LangGraph) 初始化完成，共 %d 个工具", len(tool_registry.list_tools_simple()))
 
@@ -112,10 +118,16 @@ class ChatService:
             return
 
         # ---- 2. 创建运行记录 ----
-        run = self.store.create_run(user_input, {
-            "intent_name": intent.intent_name,
-            "confidence": intent.confidence,
-        })
+        try:
+            run = self.store.create_run(user_input, {
+                "intent_name": intent.intent_name,
+                "confidence": intent.confidence,
+            })
+        except Exception as e:
+            logger.exception("创建运行记录失败")
+            yield ("error", {"content": f"创建运行记录失败: {str(e)}"})
+            yield ("done", {"status": "error"})
+            return
         run_id, thread_id = run["run_id"], run["thread_id"]
         self.store.update_run_intent(run_id, {
             "intent_name": intent.intent_name,
@@ -148,11 +160,14 @@ class ChatService:
                     break
                 yield (item["event"], item["data"])
         finally:
-            if not task.done():
-                task.cancel()
+            # 客户端断开时【不取消】图任务：
+            # 让 run 完整执行完（事件已落库，状态照常更新），
+            # 避免中途取消打断 AsyncSqliteSaver 的 checkpoint 写导致连接挂起。
+            # 用户之后可从历史面板查看该 run。
+            if task.done() and not task.cancelled():
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except Exception:
                     pass
 
     async def _run_graph_task(self, initial_state: dict, config: dict, queue: asyncio.Queue):

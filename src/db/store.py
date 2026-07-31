@@ -105,9 +105,11 @@ class RunStore:
     # 基础连接
     # ============================================
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # timeout=30：SQLite 写锁冲突时等待 30s 而不是立即抛 database is locked
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_db(self):

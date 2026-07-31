@@ -962,10 +962,17 @@ function handleEvent(event, data) {
 
     case 'human_confirm':
       showConfirmDialog(data);
+      // 追问记入历史，保证后续重新发消息时 LLM 有上下文
+      if (data.question) {
+        state.history.push({ role: 'assistant', content: String(data.question) });
+      }
       break;
 
     case 'ask_params':
       showParamsDialog(data);
+      if (data.question) {
+        state.history.push({ role: 'assistant', content: String(data.question) });
+      }
       break;
 
     case 'tool_result': {

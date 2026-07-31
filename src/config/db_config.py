@@ -8,8 +8,13 @@ from typing import Dict
 SQLITE_DB_PATH = 'purchase_management.db'
 
 # 智能体运行时数据库（SQLite）
-# 用于持久化 运行记录/计划步骤/事件日志/检查点，支撑 计划展示、回溯、定点回放
+# 用于持久化 运行记录/计划步骤/事件日志，支撑 计划展示、回溯、定点回放
 AGENT_SQLITE_DB_PATH = 'agent_runtime.db'
+
+# LangGraph 检查点数据库（SQLite）
+# 与业务库分离：AsyncSqliteSaver 的异步写与 RunStore 的同步写不再竞争同一文件的锁，
+# 避免并发请求时出现 "database is locked"
+AGENT_CHECKPOINT_DB_PATH = 'agent_checkpoint.db'
 
 # 数据库类型枚举
 DB_TYPE_SQLITE = 'sqlite'
@@ -114,7 +119,17 @@ def get_agent_db_path() -> str:
     """
     获取智能体运行时数据库（SQLite）的文件路径
 
-    该数据库用于持久化：运行记录、计划步骤、事件日志以及 LangGraph 检查点，
+    该数据库用于持久化：运行记录、计划步骤、事件日志，
     是 计划展示 / 回溯 / 定点回放 / 中断恢复 的数据底座。
     """
     return AGENT_SQLITE_DB_PATH
+
+
+def get_agent_checkpoint_db_path() -> str:
+    """
+    获取 LangGraph 检查点数据库（SQLite）的文件路径
+
+    与业务库（agent_runtime.db）分离，存放 LangGraph 检查点/中断状态，
+    避免异步检查点写与业务同步写争用同一文件导致 "database is locked"。
+    """
+    return AGENT_CHECKPOINT_DB_PATH
