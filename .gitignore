@@ -43,6 +43,7 @@ build/
 # 临时文件
 tmp/
 temp/
+test_out.txt
 
 # SQL 查询文件（用户已删除）
 sql/*.py

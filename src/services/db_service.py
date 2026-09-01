@@ -21,11 +21,11 @@ SQLITE_DB_PATH = 'purchase_management.db'
 
 # MySQL配置 (待启用)
 MYSQL_CONFIG = {
-    'host': '192.168.1.1',
+    'host': 'localhost',
     'port': 3306,
     'user': 'root',
-    'password': 'HN@123456',
-    'database': 'ai',
+    'password': '1234',
+    'database': 'ai20260805',
     'charset': 'utf8mb4',
     'cursorclass': 'DictCursor'
 }
