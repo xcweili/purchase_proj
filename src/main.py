@@ -5,6 +5,7 @@ import os
 import logging
 import sqlite3
 import asyncio
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -100,6 +101,13 @@ inventory_analysis_stream_service = InventoryAnalysisStreamService(real_db, llm_
 supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.chat_stream, llm_service.chat)
 
 # ============================================
+# 协议匹配服务导入
+# ============================================
+from .services.protocol_match_client import EVENT_DONE, new_task_id, KEEPALIVE
+from .services.protocol_task_registry import protocol_task_registry, run_worker
+from .services.mock_customer_manager import mock_customer_manager
+
+# ============================================
 # 请求模型
 # ============================================
 class AllocationMatchRequest(BaseModel):
@@ -127,6 +135,14 @@ class SupplierMatchRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
+
+class ProtocolMatchRequest(BaseModel):
+    task_id: Optional[str] = Field(default=None, description="任务ID，为空时自动生成；重复携带同一 task_id 调用会断线续传（不重复调用客户接口）")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="透传给客户接口的业务参数对象（任意属性，原样进入请求体）")
+    url: Optional[str] = Field(default=None, description="客户流式接口地址；为空使用默认配置（测试页可填写真实/模拟地址）")
+
+class CheckUrlRequest(BaseModel):
+    url: str = Field(..., description="待检测的客户接口地址")
 
 # ============================================
 # 智能调配接口 - 流式版本
@@ -438,7 +454,131 @@ async def startup_event():
 async def shutdown_event():
     """应用关闭时清理"""
     await session_manager.stop()
+    mock_customer_manager.stop()
     logger.info("[Main] 应用关闭，会话管理器已停止")
+
+
+# ============================================
+# 协议匹配接口（单接口流式代理，支持断线重连续传）
+# ============================================
+@app.post("/api/protocol/match")
+async def protocol_match(request: ProtocolMatchRequest):
+    """发起协议匹配并实时转发客户过程事件（单一接口，支持断线重连）
+
+    - 新 task_id：调用客户流式接口一次（地址默认 127.0.0.1:8100，
+      可由请求体 url 指定），事件实时透传；
+    - 已存在且执行中的 task_id：不再次调用客户接口，直接从上次读到的位置续传
+      （断线期间新产生的事件会补发），前端刷新/关窗后重新调用即可"接着看"；
+    - 已结束的 task_id：回放完整历史事件，方便查看结果。
+
+    匹配过程可能长达 20 分钟以上：读超时不设上限、心跳保活（详见
+    protocol_match_client）；任务后台运行，与前端连接解耦。
+    """
+    task_id = request.task_id or new_task_id()
+
+    task = protocol_task_registry.get(task_id)
+    if task is None:
+        payload = {"task_id": task_id}
+        payload.update(request.params or {})  # 客户端对象属性透传客户接口
+        task = protocol_task_registry.create(task_id, payload, url=request.url)
+        task.worker = asyncio.create_task(run_worker(task))
+        mode = "new"
+        logger.info("[Protocol] 新任务启动，调用客户接口 url=%s task_id=%s params=%s",
+                    request.url or "默认", task_id, payload)
+    elif task.done:
+        mode = "finished"
+        logger.info("[Protocol] 任务已结束，回放历史事件 task_id=%s err=%s",
+                    task_id, task.error)
+    else:
+        mode = "reconnect"
+        logger.info("[Protocol] 任务执行中，直接续传（不再调用8100）task_id=%s 已读%d条",
+                    task_id, task.consumed)
+
+    async def event_generator():
+        # 已结束的任务从 0 回放（方便刷新后查看完整结果）；执行中的从上次游标续传
+        start_pos = 0 if task.done else task.consumed
+        count = 0
+        # 先给前端一个连接元事件，方便页面区分 新建/重连/已结束
+        yield f"data: {json.dumps({'event': 'conn', 'task_id': task_id, 'mode': mode}, ensure_ascii=False)}\n\n"
+        try:
+            async for item in task.events_from(start_pos):
+                if item is KEEPALIVE:
+                    yield ": keepalive\n\n"
+                else:
+                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    if item.get("event") == EVENT_DONE:
+                        break
+                count += 1
+        except asyncio.CancelledError:
+            logger.info("[Protocol] 客户端断开，任务后台继续运行 task_id=%s 本次已读%d条",
+                        task_id, count)
+            raise
+        finally:
+            task.consumed = max(task.consumed, start_pos + count)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/protocol/check-url")
+async def check_customer_url(request: CheckUrlRequest):
+    """检测客户接口地址是否可访问（只做连通性探测，不触发匹配流程）
+
+    说明：对目标地址发一次 GET（短超时），只要拿到任何 HTTP 响应
+    （含 4xx/5xx，如 405 表示接口存在但方法不允许）即视为可达；
+    只有建连失败/超时等网络错误才算不可达。
+    """
+    url = request.url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url)
+        logger.info("[Protocol] 连通性检测 url=%s status=%s", url, resp.status_code)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"reachable": True, "status": resp.status_code},
+        }
+    except Exception as e:  # noqa: BLE001 - 探测失败返回给页面展示原因
+        logger.warning("[Protocol] 连通性检测失败 url=%s err=%s", url, e)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"reachable": False, "error": str(e)},
+        }
+
+
+# ============================================
+# 模拟客户服务生命周期控制接口（供测试页面使用）
+# ============================================
+@app.get("/api/mock/customer/status")
+async def mock_customer_status():
+    """查询模拟客户服务运行状态"""
+    return {"code": 200, "message": "success", "data": await asyncio.to_thread(mock_customer_manager.status)}
+
+
+@app.post("/api/mock/customer/start")
+async def mock_customer_start():
+    """启动模拟客户服务（127.0.0.1:8100）"""
+    try:
+        data = await asyncio.to_thread(mock_customer_manager.start)
+    except Exception as e:  # noqa: BLE001 - 启动失败时给前端明确提示
+        return {"code": 500, "message": str(e), "data": None}
+    return {"code": 200, "message": "success", "data": data}
+
+
+@app.post("/api/mock/customer/stop")
+async def mock_customer_stop():
+    """停止模拟客户服务"""
+    return {"code": 200, "message": "success", "data": await asyncio.to_thread(mock_customer_manager.stop)}
 
 
 # ============================================
@@ -450,7 +590,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def favicon():
     return FileResponse("static/favicon.ico") if os.path.exists("static/favicon.ico") else Response(status_code=204)
 
-@app.get("/")
+@app.get("/purchase")
 async def root():
     """首页 - 流式交互界面"""
     return FileResponse("static/index.html")
+
+@app.get("/division")
+async def root():
+    """首页 - 流式交互界面"""
+    return FileResponse("static/division.html")
+
+@app.get("/protocol-test")
+async def protocol_test():
+    """协议匹配联调测试页面"""
+    return FileResponse("static/protocol_test.html")

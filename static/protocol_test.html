@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>协议匹配流式联调测试</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --panel:#fff; --line:#e3e8ef; --ink:#1f2937;
+    --muted:#6b7280; --brand:#2563eb; --ok:#15803d; --warn:#b45309; --err:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
+  .wrap{max-width:960px;margin:0 auto;padding:20px 20px 60px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .panel h2{font-size:15px;margin:0 0 12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{cursor:pointer;border:1px solid var(--brand);background:var(--brand);color:#fff;
+    padding:8px 16px;border-radius:7px;font-size:14px;font-family:inherit}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:#fff;color:var(--brand)}
+  .btn.danger{border-color:var(--err);background:var(--err)}
+  .btn.go{border-color:var(--ok);background:var(--ok)}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:12px;color:var(--muted)}
+  input[type=text]{padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:inherit;width:150px}
+  .badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .badge.on{background:#f0fdf4;color:var(--ok);border:1px solid #bbf7d0}
+  .badge.off{background:#f1f5f9;color:var(--muted);border:1px solid var(--line)}
+  .badge.live{background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe}
+  .status{padding:9px 12px;border-radius:7px;font-size:13px;margin-top:12px;display:none}
+  .status.show{display:block}
+  .status.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+  .status.warn{background:#fffbeb;color:var(--warn);border:1px solid #fde68a}
+  .status.ok{background:#f0fdf4;color:var(--ok);border:1px solid #bbf7d0}
+  .status.err{background:#fef2f2;color:var(--err);border:1px solid #fecaca}
+  .tl{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:12px;
+    font-family:ui-monospace,Consolas,"Courier New",monospace;font-size:12px;background:#fafcff}
+  .tl .line{padding:5px 12px;border-bottom:1px dashed #eef1f5;display:flex;gap:10px}
+  .tl .line:last-child{border-bottom:0}
+  .tl .tag{min-width:84px;font-weight:600;flex-shrink:0}
+  .t-step_start{color:#2563eb}.t-step_end{color:#15803d}.t-step_update{color:#b45309}
+  .t-reasoning{color:#6b7280}.t-done{color:#15803d}.t-error{color:#dc2626}.t-conn{color:#7c3aed}.t-other{color:#475569}
+  .tl .txt{word-break:break-all}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;font-size:13px;margin-top:10px}
+  .kv .k{color:var(--muted)}
+  .verdict{font-size:15px;font-weight:700;margin-top:12px;padding:12px;border-radius:8px}
+  .verdict.pass{background:#f0fdf4;color:var(--ok);border:1px solid #bbf7d0}
+  .verdict.fail{background:#fef2f2;color:var(--err);border:1px solid #fecaca}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .note{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>协议匹配流式联调测试</h1>
+  <div class="sub">单一接口流式代理：前端 → 我们后端 /api/protocol/match → 客户流式接口(8100) → 事件实时透传 → done 断开</div>
+
+  <!-- 对方服务控制 -->
+  <div class="panel">
+    <h2>① 对方服务（模拟客户 127.0.0.1:8100）</h2>
+    <div class="row">
+      <button id="btnStart" class="btn" onclick="startCustomer()">▶ 启动对方服务</button>
+      <button id="btnStop" class="btn danger" onclick="stopCustomer()">■ 停止对方服务</button>
+      <button class="btn ghost" onclick="refreshStatus()">↻ 刷新状态</button>
+      <span>当前状态：</span><span id="statusBadge" class="badge off">检测中…</span>
+    </div>
+    <div id="ctlStatus" class="status"></div>
+  </div>
+
+  <!-- 完整流程 -->
+  <div class="panel">
+    <h2>② 完整流程测试（单击一步到位，支持断线重连）</h2>
+    <div class="row" style="margin-bottom:12px">
+      <span class="fld"><label>Task ID（留空自动生成）</label><input type="text" id="taskId" placeholder="重连时填同一ID"></span>
+      <span class="fld" style="flex:1.3"><label>附加参数 params（JSON，原样透传客户接口）</label><input type="text" id="params" value='{"warehouseCode":"WH001","planMonth":"2026-08"}' placeholder='{"key":"value"}'></span>
+      <span class="fld" style="flex:1.6"><label>对方服务地址（留空用默认 8100 模拟）</label>
+        <span style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="custUrl" style="flex:1" value="http://127.0.0.1:8100/api/customer/protocol/match" placeholder="http://host:port/api/customer/protocol/match">
+          <button id="btnCheckUrl" class="btn ghost" onclick="checkUrl()">🔍 测试连通性</button>
+        </span>
+      </span>
+    </div>
+    <div class="row">
+      <button id="btnRun" class="btn go" onclick="runFlow()">🚀 发起匹配</button>
+      <button id="btnStop" class="btn danger" onclick="stopStream()">■ 断开连接（后台继续跑）</button>
+      <span>连接方式：</span><span id="modeBadge" class="badge off">未连接</span>
+    </div>
+    <div class="note">流程：填 Task ID（留空自动生成）与附加参数 params（原样透传给客户接口）；「测试连通性」可验证下方对方服务地址是否可访问。点「发起匹配」调后端 → 后端调该地址的客户接口 → 长任务期间点「断开连接」模拟刷新/关窗；任务仍在后台运行，之后填同一 Task ID 再点「发起匹配」，后端不再调客户接口，而从断点继续把未收到的事件传回，直到 done 结束。</div>
+    <div id="urlStatus" class="status"></div>
+    <div id="runStatus" class="status"></div>
+
+    <!-- 时间线 -->
+    <div class="tl" id="timeline" style="display:none"></div>
+
+    <!-- 校验结果 -->
+    <div id="summary" style="display:none">
+      <h2 style="margin-top:16px">③ 结果</h2>
+      <div class="kv" id="summaryKv"></div>
+      <div id="verdict" class="verdict"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ 工具 ============ */
+const $ = id => document.getElementById(id);
+
+function setCtlStatus(msg, kind){ showStatus($('ctlStatus'), msg, kind); }
+function setRunStatus(msg, kind){ showStatus($('runStatus'), msg, kind); }
+function setUrlStatus(msg, kind){ showStatus($('urlStatus'), msg, kind); }
+function showStatus(el, msg, kind){
+  el.textContent = msg; el.className = 'status show ' + (kind||'info');
+}
+
+async function api(url, opts){
+  const resp = await fetch(url, opts);
+  const body = await resp.json().catch(()=>({}));
+  return {status: resp.status, body};
+}
+
+/* ============ 对方服务控制 ============ */
+async function getStatus(){
+  const r = await api('/api/mock/customer/status');
+  return (r.body && r.body.data) || {};
+}
+
+function renderStatus(d){
+  const badge = $('statusBadge');
+  if(d && d.running){
+    badge.textContent = '运行中 · ' + (d.host||'127.0.0.1') + ':' + (d.port||8100);
+    badge.className = 'badge on';
+    $('btnStart').disabled = true;
+    $('btnStop').disabled = false;
+    $('btnRun').disabled = false;
+  }else{
+    badge.textContent = '未运行';
+    badge.className = 'badge off';
+    $('btnStart').disabled = false;
+    $('btnStop').disabled = true;
+    $('btnRun').disabled = true;
+  }
+}
+
+async function refreshStatus(){
+  try{ renderStatus(await getStatus()); }
+  catch(e){
+    $('statusBadge').textContent = '检测失败';
+    $('statusBadge').className = 'badge off';
+    setCtlStatus('状态查询失败：' + e.message, 'err');
+  }
+}
+
+async function startCustomer(){
+  setCtlStatus('正在启动对方服务…', 'info');
+  $('btnStart').disabled = true;
+  const r = await api('/api/mock/customer/start', {method:'POST'});
+  setCtlStatus(r.status === 200 && r.body.code === 200 ? '对方服务已启动' : '启动失败：'+(r.body.message||r.status),
+               r.status === 200 && r.body.code === 200 ? 'ok' : 'err');
+  await refreshStatus();
+}
+
+async function stopCustomer(){
+  setCtlStatus('正在停止对方服务…', 'info');
+  $('btnStop').disabled = true;
+  const r = await api('/api/mock/customer/stop', {method:'POST'});
+  setCtlStatus('对方服务已停止', 'info');
+  await refreshStatus();
+}
+
+/* ============ 时间线 ============ */
+const TAG_CLS = {
+  step_start:'t-step_start', step_end:'t-step_end', step_update:'t-step_update',
+  reasoning:'t-reasoning', done:'t-done', error:'t-error'
+};
+function eventText(ev){
+  if(ev.event === 'step_update'){
+    const p = ev.progress || {};
+    return '正在计算第 ' + (p.current??'?') + '/' + (p.total??'?') + ' 种分配策略';
+  }
+  const step = ev.step_id ? ('[' + ev.step_id + '] ') : '';
+  return step + (ev.title || ev.content || ev.summary || ev.message || '');
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function clearTimeline(){
+  $('timeline').innerHTML = '';
+  $('timeline').style.display = 'none';
+}
+function addTimeline(ev){
+  const box = $('timeline');
+  box.style.display = 'block';
+  const line = document.createElement('div');
+  line.className = 'line';
+  line.innerHTML = '<span class="tag ' + (TAG_CLS[ev.event]||'t-other') + '">' +
+    esc(ev.event) + '</span><span class="txt">' + esc(eventText(ev)) + '</span>';
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ============ 结果面板 ============ */
+function clearSummary(){
+  $('summary').style.display = 'none';
+  $('summaryKv').innerHTML = '';
+  $('verdict').innerHTML = '';
+  $('verdict').className = 'verdict';
+}
+function addKv(k, v){
+  const kv = $('summaryKv');
+  const d = document.createElement('div');
+  d.className = 'k'; d.textContent = k;
+  const vv = document.createElement('div');
+  vv.className = 'mono'; vv.textContent = v;
+  kv.appendChild(d); kv.appendChild(vv);
+}
+
+/* ============ 完整流程：单接口 + 断线重连 ============ */
+let streamAbort = null;          // 当前连接的 AbortController
+
+function genTaskId(){
+  return 'match-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+function getTaskId(){
+  let id = ($('taskId').value || '').trim();
+  if(!id){ id = genTaskId(); $('taskId').value = id; }
+  localStorage.setItem('pt_task_id', id);
+  return id;
+}
+function getParams(){
+  const raw = ($('params').value || '').trim();
+  if(!raw) return {};
+  try{ return JSON.parse(raw); }
+  catch(e){ throw new Error('params 不是合法 JSON：' + e.message); }
+}
+function getUrl(){
+  const url = ($('custUrl').value || '').trim();
+  localStorage.setItem('pt_cust_url', url);
+  return url || null;   // 空 -> 后端使用默认地址(8100)
+}
+
+/* 测试对方服务地址连通性（后端代理探测，不触发匹配流程） */
+async function checkUrl(){
+  const url = getUrl() || '';
+  if(!url){ setUrlStatus('请先填写对方服务地址', 'warn'); return; }
+  setUrlStatus('检测中…', 'info');
+  $('btnCheckUrl').disabled = true;
+  const r = await api('/api/protocol/check-url', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+  $('btnCheckUrl').disabled = false;
+  const d = r.body && r.body.data;
+  if(r.status === 200 && d && d.reachable){
+    setUrlStatus('✅ 可达 · HTTP ' + d.status + '（' + url + '）', 'ok');
+  }else{
+    setUrlStatus('❌ 不可达：' + ((d && d.error) || (r.body && r.body.message) || r.status) + '（' + url + '）', 'err');
+  }
+}
+
+const MODE_TEXT = {
+  new:      '新建连接（已调用客户8100）',
+  reconnect:'断线重连（任务执行中，续传，未重复调用8100）',
+  finished: '任务已结束（回放历史事件）'
+};
+function renderConn(ev){
+  const txt = MODE_TEXT[ev.mode] || ev.mode;
+  const badge = $('modeBadge');
+  badge.textContent = (ev.mode === 'new' ? '新建' : (ev.mode === 'reconnect' ? '重连续传' : '历史回放'));
+  badge.className = 'badge ' + (ev.mode === 'reconnect' ? 'live' : (ev.mode === 'new' ? 'on' : 'off'));
+  addTimeline({event:'conn', message: txt + ' · task=' + ev.task_id});
+  setRunStatus(ev.mode === 'new' ? '已连接，等待客户事件…' : (ev.mode === 'reconnect' ? '已重连续传，未重复调用8100' : '回放中…'), 'info');
+}
+
+async function runFlow(){
+  const taskId = getTaskId();
+  let params;
+  try{ params = getParams(); }
+  catch(e){ setRunStatus(e.message, 'err'); return; }
+  const url = getUrl();
+  let st = {};
+  try{ st = await getStatus(); }catch(e){}
+  if(!st.running){ setRunStatus('请先点击「① 启动对方服务」，再发起匹配', 'warn'); return; }
+
+  setRunStatus('连接中…');
+  $('btnRun').disabled = true;
+  clearTimeline(); clearSummary();
+
+  const events = [];
+  const abort = new AbortController();
+  streamAbort = abort;
+  try{
+    const resp = await fetch('/api/protocol/match', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({task_id: taskId, params, url}),
+      signal: abort.signal
+    });
+    if(!resp.ok) throw new Error('发起匹配失败 HTTP ' + resp.status);
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', finished = false;
+    while(true){
+      let chunk;
+      try{ chunk = await reader.read(); }catch(e){
+        if(abort.signal.aborted) break;   // 主动断开（模拟刷新/关窗）
+        throw e;
+      }
+      if(chunk.done) break;
+      buf += dec.decode(chunk.value, {stream:true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for(const raw of lines){
+        const line = raw.trim();
+        if(!line.startsWith('data: ')) continue;
+        let ev; try{ ev = JSON.parse(line.slice(6)); }catch(e){ continue; }
+        events.push(ev);
+        if(ev.event === 'conn'){ renderConn(ev); continue; }
+        addTimeline(ev);
+        if(ev.event === 'done' || ev.event === 'error') finished = true;
+      }
+      if(finished) break;
+    }
+  }catch(e){
+    if(!abort.signal.aborted){ addTimeline({event:'error', message: e.message}); setRunStatus('连接异常：' + e.message, 'err'); }
+  }finally{
+    if(streamAbort === abort) streamAbort = null;
+    $('btnRun').disabled = false;
+  }
+
+  if(!abort.signal.aborted) renderSummary(events, params, url);
+}
+
+function renderSummary(events, params, url){
+  const doneEv = events.find(e => e.event === 'done');
+  const errEv = events.find(e => e.event === 'error');
+  const connEv = events.find(e => e.event === 'conn');
+  const result = doneEv ? (doneEv.result || {}) : {};
+
+  $('summary').style.display = 'block';
+  addKv('Task ID', (doneEv && doneEv.task_id) || (connEv && connEv.task_id) || '-');
+  addKv('连接方式', connEv ? (MODE_TEXT[connEv.mode] || connEv.mode) : '-');
+  addKv('透传参数', JSON.stringify(params || {}));
+  addKv('对方服务地址', url || '默认');
+  addKv('收到事件数', String(events.filter(e => e.event !== 'conn').length));
+  addKv('结束事件', doneEv ? 'done' : (errEv ? 'error' : '无'));
+  if(Object.keys(result).length) addKv('最终结果', JSON.stringify(result));
+
+  const verdict = $('verdict');
+  if(doneEv && Object.keys(result).length){
+    verdict.className = 'verdict pass';
+    verdict.textContent = '✓ PASS：匹配完成，事件流与最终结果正常';
+    setRunStatus('流程测试通过', 'ok');
+  }else{
+    verdict.className = 'verdict fail';
+    verdict.textContent = '✗ FAIL：' + (errEv ? (errEv.message || '匹配出错') : '未收到 done 事件（流中断）');
+    setRunStatus('流程测试未通过', 'err');
+  }
+}
+
+/* 仅断开连接，后台任务继续跑；之后点「发起匹配」即可续传（等价于刷新页面后重连） */
+function stopStream(){
+  if(streamAbort) streamAbort.abort();
+  addTimeline({event:'conn', message:'—— 已断开连接，后台任务继续运行；刷新页面后点「发起匹配」可续传 ——'});
+  $('modeBadge').className = 'badge off';
+  $('modeBadge').textContent = '已断开';
+  setRunStatus('已断开（任务后台继续运行）', 'warn');
+}
+
+/* 页面加载：恢复上次 task_id / 服务地址 + 刷新状态 */
+(function(){
+  const saved = localStorage.getItem('pt_task_id');
+  if(saved){
+    $('taskId').value = saved;
+    setRunStatus('检测到上次 Task ID：' + saved + '。若任务仍在执行，直接点「发起匹配」即可断线重连续传', 'info');
+  }
+  const savedUrl = localStorage.getItem('pt_cust_url');
+  if(savedUrl) $('custUrl').value = savedUrl;
+  refreshStatus();
+})();
+</script>
+</body>
+</html>

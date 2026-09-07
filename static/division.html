@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仓库区域划分工具 · 三级仓库规划</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f5f7fa; --panel:#fff; --line:#e3e8ef; --ink:#1f2937;
+    --muted:#6b7280; --brand:#2563eb; --brand2:#0ea5e9;
+    --warn:#b45309; --ok:#15803d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 20px 60px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px;margin-bottom:16px}
+  .panel h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .panel h2 .tag{font-size:11px;font-weight:400;color:var(--brand);
+    border:1px solid var(--brand);border-radius:6px;padding:1px 6px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:left}
+  th{background:#f1f5f9;font-weight:600}
+  input[type=text],input[type=number],select{width:100%;padding:5px 7px;border:1px solid var(--line);
+    border-radius:6px;font-size:13px;font-family:inherit;background:#fff}
+  .btn{cursor:pointer;border:1px solid var(--brand);background:var(--brand);color:#fff;
+    padding:7px 14px;border-radius:7px;font-size:13px;font-family:inherit}
+  .btn.ghost{background:#fff;color:var(--brand)}
+  .btn.sm{padding:4px 9px;font-size:12px}
+  .btn.warn-btn{border-color:#dc2626;background:#dc2626}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px}
+  .row .fld{display:flex;flex-direction:column;gap:4px}
+  .row label{font-size:12px;color:var(--muted)}
+  textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:7px;
+    padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:12px;resize:vertical}
+  .grid2{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+  @media(max-width:880px){.grid2{grid-template-columns:1fr}}
+  .status{padding:8px 12px;border-radius:7px;font-size:13px;margin-top:10px;display:none}
+  .status.show{display:block}
+  .status.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+  .status.warn{background:#fffbeb;color:var(--warn);border:1px solid #fde68a}
+  .status.ok{background:#f0fdf4;color:var(--ok);border:1px solid #bbf7d0}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px}
+  .pill.center{background:#fee2e2;color:#b91c1c}
+  .pill.region{background:#dbeafe;color:#1d4ed8}
+  .pill.term{background:#f1f5f9;color:#475569}
+  #map{width:100%;height:auto;background:#fafcff;border:1px solid var(--line);border-radius:8px}
+  a{color:var(--brand)}
+  #mapdiv{height:440px;border:1px solid var(--line);border-radius:8px;background:#eef2f7}
+  .tag-note{font-size:12px;color:var(--muted)}
+  .auto-dist{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .calc-log{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+    font-family:ui-monospace,Consolas,monospace;font-size:12px;background:#fafcff;margin:10px 0}
+  .calc-log .log-line{line-height:1.7}
+  .calc-log .log-line.ok{color:#15803d}
+  .calc-log .log-line.fail{color:#b45309}
+
+  /* 划分参数面板新排版 */
+  .param-grid{display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start}
+  @media(max-width:700px){.param-grid{grid-template-columns:1fr}}
+  .param-group{display:flex;flex-direction:column;gap:10px}
+  .param-group label{font-size:12px;color:var(--muted);font-weight:500}
+  .param-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .k-input{width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px}
+  .auto-k{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+  .auto-k input{cursor:pointer}
+  .auto-k-note{font-size:12px;color:var(--muted)}
+  .slider-wrap{display:flex;flex-direction:column;gap:6px}
+  .slider-track{width:100%;display:flex;align-items:center;gap:10px}
+  .slider-track input[type=range]{flex:1}
+  .slider-val{min-width:34px;text-align:center;font-size:13px;font-weight:600;color:var(--brand);background:#eff6ff;border-radius:6px;padding:2px 6px}
+  .slider-labels{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+  .action-row{display:flex;gap:10px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  /* 地图上的仓库名标签 */
+  .wh-label{background:rgba(255,255,255,.92);border:1px solid rgba(0,0,0,.18);border-radius:4px;font-size:11px;line-height:1.2;padding:1px 5px;color:#1a2333;box-shadow:0 1px 3px rgba(0,0,0,.25);pointer-events:none;font-weight:600;white-space:nowrap}
+  .wh-label::before{border-top:5px solid rgba(0,0,0,.18)}
+  .wh-label-center{color:#dc2626;font-weight:800}
+  .wh-label-region{color:#1d4ed8;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>仓库区域划分工具 · 三级仓库规划</h1>
+
+  <!-- 输入 -->
+  <div class="panel">
+    <h2>录入仓库</h2>
+    <div class="row">
+      <button class="btn sm" onclick="addRow()">+ 添加一行</button>
+      <button class="btn sm" onclick="recommendRegions()">✨ 自动推荐区域库</button>
+      <button class="btn warn-btn sm" onclick="delSelected()">批量删除</button>
+      <button class="btn ghost sm" onclick="clearAll()">清空</button>
+    </div>
+    <table id="inTable">
+      <thead><tr>
+        <th style="width:32px;text-align:center"><input type="checkbox" id="ckAll" onchange="toggleAll(this)" style="width:auto;vertical-align:middle" title="全选"></th>
+        <th style="width:38px">#</th>
+        <th style="width:22%">仓库名称</th>
+        <th style="width:14%">经度</th>
+        <th style="width:14%">纬度</th>
+        <th style="width:15%">容量(万元)</th>
+        <th style="width:18%">仓库类型</th>
+      </tr></thead>
+      <tbody id="inBody"></tbody>
+    </table>
+    <div style="margin-top:14px">
+      <details>
+        <summary style="cursor:pointer;color:var(--brand);font-size:13px">或从 CSV / Excel 批量导入</summary>
+        <div class="hint">格式：<code>名称,经度,纬度,容量[,类型]</code>，类型：终端库/区域库/周转库（原「中心库」按「区域库」处理）</div>
+        <textarea id="csvIn" placeholder="长沙周转库,112.93,28.23,19000,周转库&#10;郴州周转库,113.01,25.77,14000,周转库&#10;宜章库,112.95,25.39,800&#10;..."></textarea>
+        <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button class="btn ghost sm" onclick="importCSV()">导入 CSV</button>
+          <span style="font-size:12px;color:var(--muted)">或选择文件（.xlsx / .xls / .csv）：</span>
+          <input type="file" id="excelFile" accept=".xlsx,.xls,.csv" style="width:auto;font-size:12px" onchange="importExcel(this.files[0])">
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- 距离矩阵 -->
+  <div class="panel">
+    <h2>距离矩阵（实际交通距离）</h2>
+    <div class="auto-dist">
+      <input type="text" id="distKey" placeholder="高德 Key（多个用逗号分隔可提速）" style="width:260px" oninput="syncKeyFromB()">
+      <button class="btn sm" onclick="autoCalcDist()">🛰 自动计算实际距离</button>
+      <button class="btn ghost sm" onclick="stopCalc()">停止</button>
+    </div>
+    <div id="calcInfo" class="tag-note" style="margin:0 0 8px">填入高德 Key 后点击上方按钮，系统自动批量查询所有仓库对的实际驾车距离填入矩阵；已算出的会保留，随时可停止、再次点击继续。</div>
+    <textarea id="distIn" placeholder="仓库A,仓库B,距离(km)（手动补充方式；也可以直接用上方「自动计算实际距离」一键生成）&#10;..."></textarea>
+    <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn ghost sm" onclick="openFixModal()">🧹 检测异常距离（绕行系数）</button>
+      <button class="btn ghost sm" onclick="importDist()">导入距离矩阵</button>
+      <button class="btn ghost sm" onclick="document.getElementById('distFile').click()">📄 导入 CSV 文件</button>
+      <input type="file" id="distFile" accept=".csv,.txt,text/csv,text/plain" style="display:none" onchange="importDistFile(this)">
+      <button class="btn ghost sm" onclick="exportDistTemplate()">生成矩阵模板</button>
+      <button class="btn ghost sm" onclick="clearDist()">清空矩阵</button>
+      <button class="btn ghost sm" onclick="clearCalcLog()">清空日志</button>
+      <button class="btn ghost sm" onclick="clearDistCache()">清除缓存</button>
+      <span id="distInfo" class="tag-note">当前已录入 0 对</span>
+    </div>
+    <div id="calcLog" class="calc-log" style="display:none"></div>
+  </div>
+
+  <!-- 参数 + 运行 -->
+  <div class="panel">
+    <h2>划分参数</h2>
+    <div class="param-grid">
+      <div class="param-group">
+        <label>区域库推荐数量 k（自动推荐时用）</label>
+        <div class="param-row">
+          <input type="number" id="kVal" class="k-input" value="4" min="1">
+        </div>
+        <label class="auto-k">
+          <input type="checkbox" id="autoK">
+          <span>自动选 k（轮廓系数）</span>
+        </label>
+
+      </div>
+
+      <div class="param-group">
+        <label>区域库推荐偏好（位置居中 vs 容量大）</label>
+        <div class="slider-wrap">
+          <div class="slider-track">
+            <input type="range" id="wVal" min="0" max="1" step="0.05" value="0.5" oninput="wLab.textContent=this.value">
+            <span class="slider-val" id="wLab">0.5</span>
+          </div>
+          <div class="slider-labels">
+            <span>更看重位置居中</span>
+            <span>更看重容量大</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="btn" onclick="run()">▶ 开始划分</button>
+      <button class="btn ghost" onclick="exportCSV()">导出结果 CSV</button>
+    </div>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <!-- 结果 -->
+  <div class="panel" id="resultPanel" style="display:none">
+    <h2>③ 划分结果</h2>
+    <div class="grid2">
+      <div>
+        <h2 style="font-size:14px;margin:0 0 8px">仓库明细</h2>
+        <div style="max-height:340px;overflow:auto">
+          <table id="outTable"><thead><tr>
+            <th style="width:32px">#</th>
+            <th>名称</th><th>类型</th><th>所属区域</th><th>上级仓库</th>
+            <th>到上级(km)</th><th>容量</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div>
+        <h2 style="font-size:14px;margin:0 0 8px">区域汇总</h2>
+        <table id="sumTable"><thead><tr>
+          <th style="width:32px">#</th>
+          <th>区域(区域库/周转库)</th><th>辖终端</th><th>区域总容量</th>
+          <th>平均接驳</th><th>最远接驳</th><th>上级枢纽</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 地图（常驻） -->
+  <div class="panel">
+    <h2>地图分布（不同颜色=不同区域）</h2>
+    <div class="row" style="align-items:center;margin-top:6px">
+      <label style="font-size:12px;color:var(--muted)">路径显示：</label>
+      <select id="routeMode" style="width:150px" onchange="redrawMap()">
+        <option value="line">直线连接</option>
+        <option value="drive">高德驾车路线(需Key)</option>
+      </select>
+      <input type="text" id="amapKey" placeholder="高德 Key（多个用逗号分隔可提速）" style="width:230px" oninput="syncKeyFromA()" onchange="redrawMap()">
+      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="showDistPairs" onchange="onShowDistPairs(this)" style="width:auto"> 显示已录入距离对</label>
+      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="showAllNames" onchange="redrawMap()" style="width:auto"> 显示全部名称</label>
+      <button class="btn ghost sm" onclick="redrawMap()">↻ 重新绘制地图</button>
+    </div>
+    <div id="mapdiv"></div>
+    <div id="mapStatus" class="tag-note">地图待初始化</div>
+    <svg id="map" style="display:none" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">
+      <span><i style="background:#2563eb"></i>区域库/周转库（色=所属区域）</span>
+      <span><i style="background:#9aa6b2"></i>终端库</span>
+      <span>细虚线=终端→区域库 · 线上标注为距离(km)</span>
+    </div>
+  </div>
+</div>
+
+<!-- 异常距离检测 / 修复弹窗 -->
+<div id="fixModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:999;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:12px;max-width:800px;width:100%;max-height:84vh;overflow:auto;padding:18px 20px">
+    <h2 style="font-size:15px;margin:0 0 6px">🧹 距离异常检测（绕行系数）</h2>
+    <div id="fixSummary" class="hint" style="margin-bottom:10px"></div>
+    <div style="max-height:340px;overflow:auto">
+      <table id="fixTable">
+        <thead><tr>
+          <th>仓库A</th><th>仓库B</th><th>录入距离(km)</th><th>直线距离(km)</th>
+          <th>绕行系数</th><th>判定</th><th>建议修复(km)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="closeFixModal()">关闭</button>
+      <button class="btn" id="fixApplyBtn" onclick="applyFix()">应用修复</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>if(!window.L){document.write('<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"><\/script>');}</script>
+<script>
+/* ============ 数据 ============ */
+let warehouses = [];            // {name,lng,lat,cap,type}
+let distMat = {};               // "a|b"(排序) -> km
+let lastResult = null;          // 供导出 / 重绘
+const palette = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4',
+                 '#008080','#f032e6','#a0522d','#46c2cb','#bcbd22'];
+const KM = 111.32;
+
+/* ============ 工具 ============ */
+function esc(s){return String(s).replace(/"/g,'&quot;')}
+function setStatus(msg,kind){
+  const el=document.getElementById('status');
+  el.textContent=msg; el.className='status show '+kind;
+}
+function typeOf(w){ return w.type || (w.isCenter?'区域库':'终端库'); }
+function parseType(t){
+  const s=String(t||'').trim().toLowerCase();
+  if(s==='true'||s==='center'||s==='中心库') return '区域库';  // 原「中心库」并入「区域库」
+  if(s==='region'||s==='zone'||s==='区域库') return '区域库';
+  if(s==='turnover'||s==='rotation'||s==='周转库') return '周转库';
+  return '终端库';
+}
+// 「周转库」与「区域库」同属区域枢纽角色：类型独立显示，算法上按区域库参与分组与挂靠
+function isRegionRole(t){ return t==='区域库'||t==='周转库'; }
+function matKey(a,b){ return [a,b].sort().join('|'); }
+function getDist(a,b){
+  const v=distMat[matKey(a.name,b.name)];
+  if(v!=null && isFinite(+v)) return +v;
+  return haversine(a,b);
+}
+function validWarehouses(){ return warehouses.filter(w=>w.name && !isNaN(w.lng)&&!isNaN(w.lat)&&!isNaN(w.cap)); }
+function nearest(libs,w){
+  let b=null,bd=Infinity;
+  libs.forEach(l=>{const d=getDist(w,l); if(d<bd){bd=d;b=l;}});
+  return b;
+}
+
+/* ============ 输入表 ============ */
+function renderTable(){
+  const b=document.getElementById('inBody');
+  b.innerHTML='';
+  const ckAll=document.getElementById('ckAll'); if(ckAll) ckAll.checked=false;
+  warehouses.forEach((w,i)=>{
+    const t=typeOf(w);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td style="text-align:center;vertical-align:middle"><input type="checkbox" class="rowck" data-idx="${i}" style="width:auto;vertical-align:middle"></td>
+      <td style="text-align:center;color:var(--muted);font-size:12px">${i+1}</td>
+      <td><input type="text" value="${esc(w.name)}" onchange="warehouses[${i}].name=this.value"></td>
+      <td><input type="number" step="any" value="${w.lng}" onchange="warehouses[${i}].lng=parseFloat(this.value)"></td>
+      <td><input type="number" step="any" value="${w.lat}" onchange="warehouses[${i}].lat=parseFloat(this.value)"></td>
+      <td><input type="number" step="any" value="${w.cap}" onchange="warehouses[${i}].cap=parseFloat(this.value)"></td>
+      <td><select onchange="warehouses[${i}].type=this.value">
+        ${['终端库','区域库','周转库'].map(x=>`<option value="${x}"${t===x?' selected':''}>${x}</option>`).join('')}
+      </select></td>`;
+    b.appendChild(tr);
+  });
+}
+function addRow(){ warehouses.push({name:'',lng:null,lat:null,cap:null,type:'终端库'}); renderTable(); drawWarehouses(); }
+function delSelected(){
+  const cks=[...document.querySelectorAll('#inBody input.rowck:checked')];
+  if(!cks.length){ setStatus('请先勾选要删除的仓库','warn'); return; }
+  const idx=cks.map(c=>+c.dataset.idx).sort((a,b)=>b-a);
+  idx.forEach(i=>warehouses.splice(i,1));
+  renderTable(); drawWarehouses();
+  setStatus('已删除 '+idx.length+' 个仓库','info');
+}
+function toggleAll(cb){
+  document.querySelectorAll('#inBody input.rowck').forEach(c=>c.checked=cb.checked);
+}
+function clearAll(){ warehouses=[]; renderTable(); drawWarehouses(); }
+
+function pushParsed(out){
+  const names=new Set(); let dup=false;
+  out.forEach(o=>{ if(names.has(o.name)) dup=true; names.add(o.name); });
+  warehouses=out; renderTable();
+  try{ drawWarehouses(); }catch(e){ console.error('drawWarehouses',e); }
+  const restored=loadDistCache();
+  setStatus('已导入 '+out.length+' 个仓库'
+    +(restored?'，已从缓存恢复 '+Object.keys(distMat).length+' 对实际距离（仓库数据与上次一致，无需重算）':'，未找到匹配缓存，可点击「自动计算实际距离」')
+    +(dup?'（注意：存在重名仓库，距离矩阵按名称匹配，请确认）':''),
+    dup?'warn':(restored?'ok':'info'));
+}
+
+function importCSV(){
+  const txt=document.getElementById('csvIn').value.trim();
+  if(!txt){ setStatus('CSV 为空','warn'); return; }
+  const rows=txt.split(/\r?\n/).filter(s=>s.trim());
+  const out=[];
+  for(const line of rows){
+    const f=line.split(',').map(s=>s.trim());
+    if(f.length<4){ setStatus('每行至少 4 列：名称,经度,纬度,容量','warn'); return; }
+    const lng=parseFloat(f[1]), lat=parseFloat(f[2]), cap=parseFloat(f[3]);
+    if(isNaN(lng)||isNaN(lat)||isNaN(cap)){ setStatus('坐标/容量须为数字：'+line,'warn'); return; }
+    out.push({name:f[0], lng, lat, cap, type:parseType(f[4])});
+  }
+  pushParsed(out);
+}
+
+function importExcel(file){
+  if(!file) return;
+  if(typeof XLSX==='undefined'){ setStatus('Excel 解析库未加载（需联网加载 xlsx.js），请改用上方 CSV 粘贴导入','warn'); return; }
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      if(!data || !data.length){ setStatus('Excel 无数据','warn'); return; }
+      // 找表头行
+      let headerIdx=-1, m={name:-1,lng:-1,lat:-1,cap:-1,type:-1};
+      const hRe=[/名称|仓库名|库名|^name$/i,/经度|lng|lon|longitude/i,/纬度|lat|latitude/i,/容量|承载力|cap|库容/i,/类型|type/i];
+      const mKeys=['name','lng','lat','cap','type'];
+      for(let r=0;r<Math.min(8,data.length);r++){
+        const row=data[r];
+        for(let c=0;c<row.length;c++){
+          const s=String(row[c]).trim();
+          for(let h=0;h<hRe.length;h++){
+            if(m[mKeys[h]]===-1 && hRe[h].test(s)){ m[mKeys[h]]=c; }
+          }
+        }
+        if(m.lng!==-1 && m.lat!==-1 && m.name!==-1 && m.cap!==-1){ headerIdx=r; break; }
+      }
+      const start=headerIdx+1;
+      if(headerIdx===-1){ m={name:0,lng:1,lat:2,cap:3,type:4}; }
+      const out=[];
+      for(let r=start;r<data.length;r++){
+        const row=data[r];
+        const name=String(row[m.name]||'').trim();
+        if(!name) continue;
+        const lng=parseFloat(row[m.lng]), lat=parseFloat(row[m.lat]), cap=parseFloat(row[m.cap]);
+        if(isNaN(lng)||isNaN(lat)||isNaN(cap)) continue;
+        const type=m.type>=0?parseType(row[m.type]):'终端库';
+        out.push({name, lng, lat, cap, type});
+      }
+      if(!out.length){ setStatus('未从 Excel 解析到有效数据（需要 名称/经度/纬度/容量 列）','warn'); return; }
+      pushParsed(out);
+    }catch(err){
+      setStatus('Excel 解析失败：'+err.message,'warn');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+/* ============ 自动计算实际距离（高德驾车 API） ============ */
+let calcRunning=false, calcStop=false;
+const CALC_CONCURRENCY=8;                     // 并发 8（多 Key 轮询时靠并发打满吞吐）
+let calcRateMS=100;                           // 动态限速间隔(ms)，初始=Key数×10 次/秒；遇限流自动调大降速，上限 2s/次
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+function syncKeyFromA(){ const b=document.getElementById('distKey'); if(b) b.value=document.getElementById('amapKey').value; }
+function syncKeyFromB(){ const a=document.getElementById('amapKey'); if(a) a.value=document.getElementById('distKey').value; }
+async function amapDrive(o,d,key,retries=3){
+  const url=`https://restapi.amap.com/v3/direction/driving?origin=${o.lng},${o.lat}&destination=${d.lng},${d.lat}&extensions=base&key=${encodeURIComponent(key)}`;
+  for(let i=0;i<=retries;i++){
+    let j=null, netErr=null;
+    try{
+      const r=await fetch(url,{mode:'cors'});
+      j=await r.json();
+    }catch(e){ netErr=e; }
+    if(!netErr && j && j.status==='1' && j.route && j.route.paths && j.route.paths[0] && j.route.paths[0].distance!=null)
+      return +j.route.paths[0].distance/1000;
+    const info=netErr?'网络错误':(j&&j.info?j.info:'未知错误');
+    if(!netErr && /DAILY|每日|配额/i.test(info)){                            // 日配额耗尽：重试无用，直接失败并提示
+      throw new Error(info+'（今日高德配额可能已用完，建议明天再算或更换 Key）');
+    }
+    if(!netErr && /QPS|BUSY|频繁|限流|频率/i.test(info) && calcRateMS<2000){ // 频率超限：全局降速后重试
+      calcRateMS*=2;
+    }
+    if(i<retries){ await sleep(Math.min(2000,600*(i+1))); continue; }
+    throw new Error(info);
+  }
+}
+function autoCalcDist(){
+  const keyRaw=(document.getElementById('distKey').value||'').trim()||(document.getElementById('amapKey').value||'').trim();
+  const keys=keyRaw.split(/[,，;；\s]+/).filter(Boolean);
+  if(!keys.length){ setStatus('请先填写高德 Web 服务 Key（距离矩阵面板上方）','warn'); return; }
+  calcRateMS=Math.round(100/Math.max(1,keys.length));   // 多 Key 轮询：总速率=Key数×10 次/秒，每个 Key 独立限流/配额
+  if(calcRunning){ setStatus('正在计算中，请先点击「停止」','warn'); return; }
+  const w=validWarehouses();
+  if(w.length<2){ setStatus('至少需要 2 个仓库才能计算距离','warn'); return; }
+  const pairs=[];
+  for(let i=0;i<w.length;i++) for(let j=i+1;j<w.length;j++){
+    const k=matKey(w[i].name,w[j].name);
+    if(distMat[k]==null) pairs.push({a:w[i],b:w[j],k});
+  }
+  const total=pairs.length;
+  if(!total){ setStatus('全部仓库对的距离都已录入，无需计算','ok'); return; }
+  if(total>4000 && !confirm(`共 ${total} 对距离待计算（并发 ${CALC_CONCURRENCY} · ${keys.length} 个 Key 轮询 · 限速 ${Math.round(1000/calcRateMS)} 次/秒起，遇限流自动降速、失败自动重试）。\n每个 Key 配额独立，${keys.length} 个 Key 合计约 ${keys.length*5000} 次/日；已算出的会保留，随时可点「停止」，再次点击会接着算剩下的。\n是否开始？`)) return;
+  calcRunning=true; calcStop=false;
+  let keyIdx=0;
+  const nextKey=()=>keys[keyIdx++%keys.length];
+  let done=0, fail=0;
+  const info=document.getElementById('calcInfo');
+  const tick=()=>{ if(info) info.textContent=`🛰 正在计算… 剩余 ${pairs.length} 对（成功 ${done} · 失败 ${fail} · 并发 ${CALC_CONCURRENCY} · ${keys.length} Key · ${Math.round(1000/calcRateMS)} 次/秒）`; };
+  tick();
+  // 令牌桶限速：每 calcRateMS 放行 1 个请求；遇限流自动降速（calcRateMS 变大）
+  let nextSlot=Date.now();
+  const take=async ()=>{
+    while(true){
+      const now=Date.now();
+      if(now>=nextSlot){ nextSlot=now+calcRateMS; return; }
+      if(calcStop) throw new Error('stopped');
+      await new Promise(r=>setTimeout(r,Math.min(80,nextSlot-now)));
+    }
+  };
+  const finish=()=>{
+    calcRunning=false;
+    const n=Object.keys(distMat).length;
+    updateDistInfo();
+    saveDistCache();
+    if(calcStop && pairs.length){
+      if(info) info.textContent=`已停止：还剩 ${pairs.length} 对未计算，成功 ${done} · 失败 ${fail}（再次点击「自动计算实际距离」会继续剩余项）`;
+      setStatus(`已停止，已保留 ${n} 对实际距离`+(n?'（已缓存，下次导入相同数据自动恢复）':''),'info');
+    }else{
+      if(info) info.textContent='';
+      setStatus(`自动计算完成：成功 ${done} 对，失败 ${fail} 对，距离矩阵累计 ${n} 对`+(n?'（已缓存，下次导入相同数据自动恢复）':'')+'.'+(fail?'（失败项可再次点击自动重试）':'（全部为高德实际驾车距离）'), fail?'warn':'ok');
+      const {anomalies}=detectDetourAnomalies();
+      if(anomalies.length) setStatus(`自动计算完成：成功 ${done} 对，失败 ${fail} 对。⚠ 另检测到 ${anomalies.length} 对疑似异常距离（绕行系数异常），可点击「🧹 检测异常距离」查看并修复`,'warn');
+    }
+  };
+  const worker=async ()=>{
+    while(!calcStop){
+      try{ await take(); }catch(e){ return; }
+      if(calcStop) return;
+      const p=pairs.shift();
+      if(!p) return;
+      const k=nextKey();
+      try{
+        const d=await amapDrive(p.a,p.b,k);
+        distMat[p.k]=Math.round(d*10)/10; done++;
+        appendLog('✅', p.a.name+' ↔ '+p.b.name, distMat[p.k]+' km');
+      }catch(err){
+        const msg=(err&&err.message)||'失败';
+        if(/DAILY|配额/i.test(msg) && keys.length>1){       // 该 Key 日配额耗尽：剔除，后续不再轮询到它
+          keys.splice(keys.indexOf(k),1);
+          appendLog('⚠️', 'Key '+k.slice(0,6)+'… 配额耗尽已剔除', `剩 ${keys.length} 个 Key`);
+        }
+        fail++;
+        console.warn('amapDrive err',msg,p.a.name,p.b.name);
+        appendLog('❌', p.a.name+' ↔ '+p.b.name, msg);
+      }
+      tick();
+    }
+  };
+  // 并发池：CALC_CONCURRENCY 个 worker 并行取队列，令牌桶统一限速
+  Promise.all(Array.from({length:CALC_CONCURRENCY},()=>worker())).then(finish);
+}
+function stopCalc(){
+  if(!calcRunning){ setStatus('当前没有正在进行的计算','info'); return; }
+  calcStop=true;
+}
+function appendLog(mark, pair, val){
+  const box=document.getElementById('calcLog');
+  if(!box) return;
+  box.style.display='block';
+  const line=document.createElement('div');
+  line.className='log-line '+(mark==='✅'?'ok':'fail');
+  line.textContent=mark+' '+pair+' = '+val;
+  box.appendChild(line);
+  box.scrollTop=box.scrollHeight;
+}
+function clearCalcLog(){
+  const box=document.getElementById('calcLog');
+  if(box){ box.innerHTML=''; box.style.display='none'; }
+}
+
+/* ============ 距离矩阵 ============ */
+// 容错解析距离矩阵文本：自动跳过表头行、空行、空值/非法行，只导入有效对（不再因一行格式不对而整批失败）
+function parseDistText(txt){
+  txt=(txt||'').replace(/^\uFEFF/,'');
+  let n=0, skip=0, bad=[];
+  for(const line of txt.split(/\r?\n/)){
+    if(!line.trim()) continue;
+    const f=line.split(/[,，\t]+/).map(s=>s.trim().replace(/^["']+|["']+$/g,''));  // 去 Excel 引号包裹
+    if(f.length<3){ skip++; bad.push(line); continue; }
+    if(/^仓库A$/i.test(f[0]) && /^仓库B$/i.test(f[1])) continue;                    // 跳过表头
+    if(f[0]===f[1]) continue;
+    const d=parseFloat(f[2]);
+    if(!isFinite(d)||d<=0){ skip++; bad.push(line); continue; }
+    distMat[matKey(f[0],f[1])]=Math.round(d*10)/10; n++;
+  }
+  return {n,skip,bad};
+}
+function importDist(){
+  const {n,skip}=parseDistText(document.getElementById('distIn').value);
+  if(!n && !skip){ setStatus('距离矩阵为空','warn'); return; }
+  updateDistInfo();
+  saveDistCache();
+  const {anomalies}=detectDetourAnomalies();
+  setStatus('已导入 '+n+' 对仓库距离（已缓存）'+(skip?`，跳过 ${skip} 行无效数据（表头/空值/格式不对）`:'')+(anomalies.length?`。⚠ 检测到 ${anomalies.length} 对疑似异常距离（绕行系数异常），可点击「🧹 检测异常距离」查看并修复`:'')+'', anomalies.length?'warn':(skip?'info':'ok'));
+}
+// 直接选择 CSV 文件导入（兼容 UTF-8 与 GBK 编码）
+async function importDistFile(input){
+  const file=input&&input.files&&input.files[0];
+  if(!file) return;
+  try{
+    const buf=new Uint8Array(await file.arrayBuffer());
+    let text=new TextDecoder('utf-8').decode(buf);
+    if(text.includes('\ufffd')) text=new TextDecoder('gbk').decode(buf);   // 中文 Excel 默认 GBK，UTF-8 解码会出现乱码字符
+    const {n,skip}=parseDistText(text);
+    if(!n){ setStatus('未从「'+file.name+'」解析到有效距离数据（每行需：仓库A,仓库B,距离km）','warn'); input.value=''; return; }
+    updateDistInfo();
+    saveDistCache();
+    const {anomalies}=detectDetourAnomalies();
+    setStatus('已从 CSV 导入 '+n+' 对仓库距离'+(skip?`（跳过 ${skip} 行无效数据）`:'')+'（已缓存）'+(anomalies.length?`。⚠ 检测到 ${anomalies.length} 对疑似异常距离，可点击「🧹 检测异常距离」查看并修复`:'')+'', anomalies.length?'warn':(skip?'info':'ok'));
+  }catch(err){
+    setStatus('文件读取失败：'+err.message,'warn');
+  }finally{
+    input.value='';
+  }
+}
+function exportDistTemplate(){
+  const w=validWarehouses();
+  if(w.length<2){ setStatus('至少需要 2 个仓库才能生成矩阵模板','warn'); return; }
+  let s='仓库A,仓库B,距离(km)\n';
+  for(let i=0;i<w.length;i++) for(let j=i+1;j<w.length;j++){
+    const k=matKey(w[i].name,w[j].name);
+    const d=distMat[k]!=null?distMat[k]:'';
+    s+=`${w[i].name},${w[j].name},${d}\n`;
+  }
+  download('距离矩阵模板.csv',s);
+}
+function clearDist(){
+  distMat={}; document.getElementById('distIn').value=''; updateDistInfo();
+  try{ localStorage.removeItem(DIST_CACHE_KEY); }catch(e){}
+  setStatus('距离矩阵已清空（缓存已删除），将全部按直线距离估算','info');
+}
+function clearDistCache(){
+  try{ localStorage.removeItem(DIST_CACHE_KEY); }catch(e){}
+  setStatus('距离缓存已清除，下次导入相同数据需要重新计算','info');
+}
+function updateDistInfo(){
+  const n=Object.keys(distMat).length;
+  document.getElementById('distInfo').textContent='当前已录入 '+n+' 对';
+}
+
+/* ============ 绕行系数异常检测与修复 ============ */
+// 绕行系数 = 实际路网距离 / 直线距离。物理上应 ≥ 1；异常偏大说明录入值很可能是错的（如把 100km 标成 329km）。
+function detourItems(){
+  const w=validWarehouses();
+  const byName={}; w.forEach(x=>byName[x.name]=x);
+  const items=[];
+  for(const k in distMat){
+    const sep=k.indexOf('|'); if(sep<0) continue;
+    const a=byName[k.slice(0,sep)], b=byName[k.slice(sep+1)];
+    if(!a||!b) continue;
+    const d=+distMat[k]; if(!isFinite(d)||d<=0) continue;
+    const straight=haversine(a,b);
+    if(straight<1) continue;              // 坐标重合或极近（<1km），绕行系数无统计意义
+    items.push({k,aName:a.name,bName:b.name,d,straight,ratio:d/straight});
+  }
+  return items;
+}
+function med(arr){ const s=[...arr].sort((x,y)=>x-y), m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+function detectDetourAnomalies(){
+  const items=detourItems();
+  const ratios=items.map(i=>i.ratio);
+  if(ratios.length<4) return {anomalies:[],med:null,thr:null};
+  const m=med(ratios);
+  // 用「中位数 + 3×MAD」做稳健离群检测，避免极值污染均值
+  const devs=ratios.map(r=>Math.abs(r-m)).sort((x,y)=>x-y);
+  const mad=med(devs)*1.4826;
+  const thr=Math.max(m+3*mad, 3.0);       // 绝对下限 3.0：绕行 3 倍以上基本不可能是真实路网
+  const ref=Math.max(m,1.05);             // 修复参考系数 = 稳健中位数
+  const anomalies=items
+    .filter(i=>i.ratio<0.9 || i.ratio>thr) // <0.9：实际距离短于直线，物理不可能
+    .map(i=>({
+      ...i,
+      why: i.ratio<0.9 ? '录入距离 < 直线距离（物理不可能）' : '绕行系数异常偏高',
+      fixed: Math.round(i.straight*ref*10)/10   // 修复值 = 直线距离 × 参考绕行系数
+    }));
+  return {anomalies, med:m, thr};
+}
+function openFixModal(){
+  const {anomalies, med, thr}=detectDetourAnomalies();
+  const box=document.getElementById('fixModal');
+  const summary=document.getElementById('fixSummary');
+  const tbody=document.querySelector('#fixTable tbody');
+  const applyBtn=document.getElementById('fixApplyBtn');
+  tbody.innerHTML='';
+  if(!anomalies.length){
+    summary.textContent='未发现异常距离对。当前全部距离对的绕行系数（实际距离/直线距离）都在合理区间。';
+    applyBtn.style.display='none';
+  }else{
+    applyBtn.style.display='';
+    summary.textContent=`发现 ${anomalies.length} 对疑似异常距离（当前矩阵共 ${Object.keys(distMat).length} 对）。参考绕行系数中位数 = ${med.toFixed(2)}，异常判定阈值 = ${thr.toFixed(2)}（实际/直线），将按「直线距离 × 参考绕行系数」重建。`;
+    anomalies.forEach(a=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${esc(a.aName)}</td><td>${esc(a.bName)}</td>
+        <td style="color:#dc2626;font-weight:600">${a.d}</td>
+        <td>${a.straight.toFixed(1)}</td>
+        <td style="color:#b45309;font-weight:600">${a.ratio.toFixed(2)}</td>
+        <td>${esc(a.why)}</td>
+        <td style="color:#15803d;font-weight:600">${a.fixed}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  box.style.display='flex';
+}
+function closeFixModal(){ document.getElementById('fixModal').style.display='none'; }
+function applyFix(){
+  const {anomalies}=detectDetourAnomalies();
+  if(!anomalies.length){ closeFixModal(); return; }
+  anomalies.forEach(a=>{ distMat[a.k]=a.fixed; });
+  saveDistCache(); updateDistInfo();
+  closeFixModal();
+  setStatus('已修复 '+anomalies.length+' 对异常距离（按绕行系数中位数重建），距离矩阵已缓存','ok');
+}
+
+/* ============ 距离矩阵缓存（localStorage，按仓库指纹匹配） ============ */
+const DIST_CACHE_KEY='whdist_v1';
+function whFingerprint(){
+  return validWarehouses().map(w=>w.name+'\t'+w.lng+'\t'+w.lat).sort().join('\n');
+}
+function saveDistCache(){
+  try{
+    const fp=whFingerprint();
+    if(!fp) return;
+    localStorage.setItem(DIST_CACHE_KEY, JSON.stringify({fp, mat:distMat, time:Date.now()}));
+  }catch(e){ console.warn('saveDistCache',e); }
+}
+function loadDistCache(){
+  try{
+    const raw=localStorage.getItem(DIST_CACHE_KEY);
+    if(!raw) return false;
+    const c=JSON.parse(raw);
+    if(!c || !c.mat || c.fp!==whFingerprint()) return false;
+    distMat=c.mat||{};
+    updateDistInfo();
+    return true;
+  }catch(e){ console.warn('loadDistCache',e); return false; }
+}
+
+/* ============ 几何 ============ */
+function haversine(a,b){
+  const R=6371, dLat=(b.lat-a.lat)*Math.PI/180, dLng=(b.lng-a.lng)*Math.PI/180;
+  const s=Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+}
+function project(w,meanLat){
+  return {x:w.lng*KM*Math.cos(meanLat*Math.PI/180), y:w.lat*KM};
+}
+function sqDist(a,b){const dx=a.x-b.x,dy=a.y-b.y;return dx*dx+dy*dy;}
+function dist(a,b){return Math.sqrt(sqDist(a,b));}
+
+/* ============ k-means ============ */
+function kmeansPP(pts,k){
+  const cent=[]; cent.push(pts[Math.floor(Math.random()*pts.length)]);
+  while(cent.length<k){
+    const d2=pts.map(p=>Math.min(...cent.map(c=>sqDist(p,c))));
+    const sum=d2.reduce((a,b)=>a+b,0)||1; let r=Math.random()*sum, idx=0;
+    for(;idx<pts.length;idx++){ r-=d2[idx]; if(r<=0) break; }
+    cent.push(pts[Math.min(idx,pts.length-1)]);
+  }
+  return cent;
+}
+function kmeans(pts,k){
+  let best=null;
+  for(let r=0;r<12;r++){
+    let cent=kmeansPP(pts,k); let assign=new Array(pts.length);
+    for(let it=0;it<60;it++){
+      assign=pts.map(p=>{let bi=0,bd=Infinity;cent.forEach((c,i)=>{const d=sqDist(p,c);if(d<bd){bd=d;bi=i;}});return bi;});
+      const nc=Array.from({length:k},()=>({x:0,y:0,n:0}));
+      pts.forEach((p,i)=>{nc[assign[i]].x+=p.x;nc[assign[i]].y+=p.y;nc[assign[i]].n++;});
+      cent=nc.map(c=>c.n?{x:c.x/c.n,y:c.y/c.n}:pts[Math.floor(Math.random()*pts.length)]);
+    }
+    const inertia=pts.reduce((s,p,i)=>s+sqDist(p,cent[assign[i]]),0);
+    if(!best||inertia<best.inertia) best={centroids:cent,assign,inertia};
+  }
+  return best;
+}
+function silhouette(pts,assign,k){
+  const n=pts.length; let tot=0;
+  for(let i=0;i<n;i++){
+    let a=0,ac=0;
+    for(let j=0;j<n;j++) if(j!==i&&assign[j]===assign[i]){a+=dist(pts[i],pts[j]);ac++;}
+    a=ac?a/ac:0;
+    let b=Infinity;
+    for(let c=0;c<k;c++){ if(c===assign[i])continue; let s=0,cc=0;
+      for(let j=0;j<n;j++) if(assign[j]===c){s+=dist(pts[i],pts[j]);cc++;}
+      if(cc) b=Math.min(b,s/cc);
+    }
+    if(!isFinite(b)) b=0;
+    tot += (a===0&&b===0)?0:(b-a)/Math.max(a,b);
+  }
+  return tot/n;
+}
+function chooseK(pts){
+  const maxK=Math.min(8,pts.length-1);
+  let best=Math.max(2,Math.min(2,maxK)), bestS=-Infinity;
+  for(let k=2;k<=maxK;k++){
+    const km=kmeans(pts,k);
+    const s=silhouette(pts,km.assign,k);
+    if(s>bestS){bestS=s;best=k;}
+  }
+  return best;
+}
+
+/* ============ 自动推荐区域库 ============ */
+function recommendRegions(){
+  const valid=validWarehouses();
+  const kept=valid.filter(w=>isRegionRole(typeOf(w)));
+  const nonCenter=valid.filter(w=>typeOf(w)==='终端库');   // 只在终端库中推荐，已设区域库/周转库保留不动
+  if(nonCenter.length<2){ setStatus('至少需要 2 个终端库才能自动推荐区域库','warn'); return; }
+  const meanLat=nonCenter.reduce((s,w)=>s+w.lat,0)/nonCenter.length;
+  const pts=nonCenter.map(w=>({...project(w,meanLat), w}));
+  let k=parseInt(document.getElementById('kVal').value)||4;
+  if(document.getElementById('autoK').checked){ k=chooseK(pts); }
+  k=Math.max(1,Math.min(k,nonCenter.length));
+  const km=kmeans(pts,k);
+  const wPre=parseFloat(document.getElementById('wVal').value);
+  const W_CENTER=wPre, W_CAP=1-wPre;
+  const clusterPts={};
+  pts.forEach((p,i)=>{ (clusterPts[km.assign[i]] ||= []).push({p,i}); });
+  const chosen=new Set();
+  for(const c in clusterPts){
+    const members=clusterPts[c];
+    const cen=km.centroids[+c];
+    const dC=members.map(m=>dist(m.p,cen));
+    const caps=members.map(m=>m.p.w.cap);
+    const cMin=Math.min(...dC),cMax=Math.max(...dC);
+    const capMin=Math.min(...caps),capMax=Math.max(...caps);
+    let bi=0,bScore=-Infinity;
+    members.forEach((m,idx)=>{
+      const close=cMax===cMin?0.5:1-(dC[idx]-cMin)/(cMax-cMin);
+      const capN=capMax===capMin?0.5:(caps[idx]-capMin)/(capMax-capMin);
+      const sc=W_CENTER*close+W_CAP*capN;
+      if(sc>bScore){bScore=sc;bi=idx;}
+    });
+    chosen.add(members[bi].p.w);
+  }
+  let added=0;
+  warehouses.forEach(w=>{
+    if(typeOf(w)==='中心库'||isRegionRole(typeOf(w))) return;  // 保留已有区域库/周转库（原中心库已并入区域库）
+    if(chosen.has(w)){ w.type='区域库'; added++; }
+    else w.type='终端库';
+  });
+  document.getElementById('kVal').value=k;
+  renderTable();
+  setStatus('已保留 '+kept.length+' 个已有区域库/周转库；按 k='+k+' 从终端库中新增推荐 '+added+' 个区域库（每聚类选「位置居中+容量大」评分最高者），可在表格中手动调整类型', 'ok');
+}
+
+/* ============ 主流程 ============ */
+function run(){
+  const valid=validWarehouses();
+  if(valid.length<2){ setStatus('至少需要 2 个有效仓库（名称/坐标/容量齐全）','warn'); return; }
+  const centers=valid.filter(w=>typeOf(w)==='中心库');
+  const regions=valid.filter(w=>isRegionRole(typeOf(w)));
+  const terms=valid.filter(w=>typeOf(w)==='终端库');
+  if(terms.length<1){ setStatus('至少需要 1 个终端库参与挂靠','warn'); return; }
+  if(regions.length<1){ setStatus('尚未设置区域库：请手动选择仓库类型为「区域库」或「周转库」，或点击「自动推荐区域库」','warn'); return; }
+
+  const rows=[];
+  centers.forEach(c=> rows.push({w:c,type:'中心库',region:'—',upper:'—',d:0}));
+  regions.forEach(reg=>{
+    const up=nearest(centers,reg);
+    rows.push({w:reg,type:typeOf(reg),region:reg.name,upper:up?up.name:'—',d:up?getDist(reg,up):0});  // 保留原类型（区域库/周转库）
+  });
+  terms.forEach(t=>{
+    const reg=nearest(regions,t);
+    rows.push({w:t,type:'终端库',region:reg.name,upper:reg.name,d:getDist(t,reg)});
+  });
+
+  const sums=regions.map(reg=>{
+    const terms2=rows.filter(r=>r.region===reg.name && r.type==='终端库');
+    const ds=terms2.map(t=>t.d);
+    const regRow=rows.find(r=>r.w===reg);
+    return {
+      name:reg.name, term:terms2.length,
+      cap:rows.filter(r=>r.region===reg.name).reduce((s,x)=>s+x.w.cap,0),
+      avg:ds.length?(ds.reduce((a,b)=>a+b,0)/ds.length):0,
+      max:ds.length?Math.max(...ds):0,
+      up:regRow?regRow.upper:'—'
+    };
+  });
+
+  lastResult={rows,sums,regions,centers};
+  document.getElementById('resultPanel').style.display='block';
+  draw(rows,sums,regions,centers);
+  const matrixUsed=Object.keys(distMat).length;
+  setStatus(`划分完成：共 ${rows.length} 仓库 = 区域库/周转库 ${regions.length} + 终端库 ${terms.length}。`
+    +(matrixUsed?`已用 ${matrixUsed} 对实际距离。`:'未录入距离矩阵，全部按直线距离估算。'),'ok');
+}
+
+/* ============ 渲染结果 ============ */
+function draw(rows,sums,regions,centers){
+  const ot=document.querySelector('#outTable tbody'); ot.innerHTML='';
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    const cls=r.type==='中心库'?'center':isRegionRole(r.type)?'region':'term';
+    tr.innerHTML=`<td style="text-align:center;color:var(--muted);font-size:12px">${i+1}</td>
+      <td>${esc(r.w.name)}</td>
+      <td><span class="pill ${cls}">${r.type}</span></td>
+      <td>${esc(r.region)}</td><td>${esc(r.upper)}</td>
+      <td>${r.d?r.d.toFixed(1):'—'}</td>
+      <td>${r.w.cap}</td>`;
+    ot.appendChild(tr);
+  });
+  const st=document.querySelector('#sumTable tbody'); st.innerHTML='';
+  sums.forEach((s,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td style="text-align:center;color:var(--muted);font-size:12px">${i+1}</td>
+      <td>${esc(s.name)}</td><td>${s.term}</td><td>${s.cap}</td>
+      <td>${s.avg.toFixed(1)}</td><td>${s.max.toFixed(1)}</td><td>${esc(s.up)}</td>`;
+    st.appendChild(tr);
+  });
+  drawMap(rows,regions,centers);
+}
+
+/* ============ 地图 ============ */
+let leafletMap=null, warehouseLayer=null;
+const MAX_DIST_PAIR_LINES=800;
+function showMapNote(msg){ const el=document.getElementById('mapStatus'); if(el) el.textContent=msg; }
+function onShowDistPairs(cb){
+  const n=Object.keys(distMat).length;
+  if(cb.checked && n>MAX_DIST_PAIR_LINES){
+    alert(`距离矩阵已有 ${n} 对，全部画虚线会导致地图卡死。已取消勾选，仅显示仓库点。`);
+    cb.checked=false; return;
+  }
+  redrawMap();
+}
+function drawDistPairLines(targetLayer){
+  const wb={}; warehouses.forEach(w=>{ if(w.name) wb[w.name]=w; });
+  const ks=Object.keys(distMat);
+  const sliced=ks.slice(0,MAX_DIST_PAIR_LINES);
+  if(ks.length>sliced.length) showMapNote(`⚠ 距离对共 ${ks.length} 对，为防卡顿仅绘制前 ${sliced.length} 对虚线，建议取消勾选「显示已录入距离对」`);
+  sliced.forEach(k=>{
+    const sep=k.indexOf('|'); if(sep<0) return;
+    const a=wb[k.slice(0,sep)], b=wb[k.slice(sep+1)];
+    if(a&&b){
+      L.polyline([[a.lat,a.lng],[b.lat,b.lng]],{color:'#94a3b8',weight:1,dashArray:'2 5',opacity:0.45})
+        .addTo(targetLayer).bindTooltip(distMat[k]+' km',{sticky:true});
+    }
+  });
+}
+function drawWarehouses(){
+  try{
+    if(!window.L){ showMapNote('⚠ Leaflet 未加载（请检查网络/CDN 是否被拦截）'); return; }
+    const box=document.getElementById('mapdiv');
+    if(!box || box.offsetParent===null){ showMapNote('⚠ 地图容器不可见'); return; }
+    if(!leafletMap){
+      leafletMap=L.map('mapdiv').setView([28.2,112],7);
+      L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+        {subdomains:['1','2','3','4'],attribution:'© 高德地图',maxZoom:18}).addTo(leafletMap);
+    }
+    if(warehouseLayer){ leafletMap.removeLayer(warehouseLayer); warehouseLayer=null; }
+    const pts=warehouses.filter(w=>w.lng!=null && w.lat!=null);
+    if(!pts.length){ showMapNote('地图就绪 · 当前 0 个仓库（先在上方「录入仓库」导入 CSV，点才会出现在地图上）'); return; }
+    warehouseLayer=L.layerGroup().addTo(leafletMap);
+    if(document.getElementById('showDistPairs').checked) drawDistPairLines(warehouseLayer);
+    pts.forEach(w=>{
+      const t=typeOf(w);
+      const color=t==='中心库'?'#ef4444':isRegionRole(t)?'#2563eb':'#16a34a';
+      const size=t==='中心库'?18:isRegionRole(t)?15:12;
+      const icon=L.divIcon({className:'',html:`<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 0 0 1.5px rgba(0,0,0,.35),0 2px 6px rgba(0,0,0,.4)"></div>`,iconSize:[size+6,size+6],iconAnchor:[(size+6)/2,(size+6)/2]});
+      const mk=L.marker([w.lat,w.lng],{icon,zIndexOffset:1000}).addTo(warehouseLayer).bindPopup(`<b>${esc(w.name)}</b><br>类型：${t}<br>容量：${w.cap} 万元`);
+      // 名称分级显示：中心库/区域库/周转库永久显示，终端库悬停显示（勾选「显示全部名称」则都永久显示）
+      if(t==='中心库'||isRegionRole(t)||document.getElementById('showAllNames').checked){
+        L.tooltip({permanent:true,direction:'top',offset:[0,-(size+6)/2-6],className:'wh-label '+(t==='中心库'?'wh-label-center':isRegionRole(t)?'wh-label-region':'')})
+          .setLatLng([w.lat,w.lng]).setContent(esc(w.name)).addTo(warehouseLayer);
+      }else{
+        mk.bindTooltip(esc(w.name),{sticky:true});
+      }
+    });
+    const bounds=pts.map(w=>[w.lat,w.lng]);
+    if(bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds).pad(0.15));
+    showMapNote(`地图就绪 · ${warehouses.length} 个仓库 · 已画 ${pts.length} 个点`+(document.getElementById('showDistPairs').checked?` · 距离对 ${Math.min(Object.keys(distMat).length,MAX_DIST_PAIR_LINES)}/${Object.keys(distMat).length} 条`:''));
+  }catch(e){
+    console.error('drawWarehouses',e);
+    showMapNote('⚠ 地图绘制出错：'+e.message);
+  }
+}
+function drawMap(rows,regions,centers){
+  if(window.L && document.getElementById('mapdiv').offsetParent!==null){
+    drawLeaflet(rows,regions,centers);
+  }else{
+    drawSvg(rows,regions,centers);
+  }
+}
+function redrawMap(){
+  if(!window.L) return;
+  if(lastResult) drawLeaflet(lastResult.rows,lastResult.regions,lastResult.centers);
+  else drawWarehouses();
+}
+
+function drawLeaflet(rows,regions,centers){
+  if(!leafletMap){
+    leafletMap=L.map('mapdiv').setView([28.2,112],7);
+    L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      {subdomains:['1','2','3','4'],attribution:'© 高德地图',maxZoom:18}).addTo(leafletMap);
+  }
+  // 清掉旧的自绘图层（保留底图）
+  if(warehouseLayer){ leafletMap.removeLayer(warehouseLayer); warehouseLayer=null; }
+  const toRemove=[];
+  leafletMap.eachLayer(l=>{
+    if(l instanceof L.CircleMarker || l instanceof L.Polyline || l instanceof L.Marker || l instanceof L.Tooltip) toRemove.push(l);
+  });
+  toRemove.forEach(l=>leafletMap.removeLayer(l));
+  const regionColor={}; let ci=0;
+  regions.forEach(r=>{ regionColor[r.name]=palette[ci++%palette.length]; });
+  const byName={}; rows.forEach(r=>byName[r.w.name]=r);
+  const bounds=[];
+  rows.forEach(r=>bounds.push([r.w.lat,r.w.lng]));
+  if(bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds).pad(0.15));
+
+  // 已录入距离对（勾选「显示已录入距离对」时用灰色虚线画出，鼠标悬停显示距离）
+  if(document.getElementById('showDistPairs').checked) drawDistPairLines(leafletMap);
+
+  const routeMode=document.getElementById('routeMode').value;
+  const amapKey=(document.getElementById('amapKey').value||'').trim();
+  const addPath=(a,b,opt)=>{
+    const distKm=opt.d!=null?+opt.d.toFixed(1):null;
+    if(routeMode==='drive' && amapKey){
+      const url=`https://restapi.amap.com/v3/direction/driving?origin=${a.lng},${a.lat}&destination=${b.lng},${b.lat}&key=${amapKey}`;
+      fetch(url).then(r=>r.json()).then(j=>{
+        if(j.status==='1' && j.route && j.route.paths && j.route.paths[0]){
+          const latlngs=j.route.paths[0].steps
+            .map(s=>s.polyline.split(';'))
+            .flat()
+            .map(p=>{const [lng,lat]=p.split(',').map(Number);return [lat,lng];});
+          if(latlngs.length){
+            const pl=L.polyline(latlngs,opt);
+            if(distKm!=null) pl.bindTooltip(distKm+' km',{sticky:true}).openTooltip();
+            pl.addTo(leafletMap);
+            return;
+          }
+        }
+        addStraight(a,b,opt,distKm);
+      }).catch(()=>addStraight(a,b,opt,distKm));
+    }else{
+      addStraight(a,b,opt,distKm);
+    }
+  };
+  const addStraight=(a,b,opt,distKm)=>{
+    const pl=L.polyline([[a.lat,a.lng],[b.lat,b.lng]],opt);
+    if(distKm!=null) pl.bindTooltip(distKm+' km',{sticky:true});
+    pl.addTo(leafletMap);
+  };
+
+  // 连线
+  rows.forEach(r=>{
+    if(r.type==='终端库'){
+      const reg=byName[r.upper]; if(!reg)return;
+      addPath(r.w,reg.w,{color:regionColor[r.region]||'#999',weight:2,dashArray:'5 7',d:r.d,opacity:0.85});
+    }else if(isRegionRole(r.type) && r.upper && r.upper!=='—'){
+      const ct=byName[r.upper]; if(!ct)return;
+      addPath(r.w,ct.w,{color:'#111',weight:3,d:r.d,opacity:0.85});
+    }
+  });
+  // 点（放大，确保看得见）
+  rows.forEach(r=>{
+    const color=r.type==='中心库'?'#111':regionColor[r.region]||'#9aa6b2';
+    const opt={radius:r.type==='中心库'?16:isRegionRole(r.type)?11:8,
+      color:'#fff',weight:3,fillColor:color,fillOpacity:0.95,
+      className:'wh-marker'};
+    const cm=L.circleMarker([r.w.lat,r.w.lng],opt).addTo(leafletMap)
+      .bindTooltip(`${esc(r.w.name)}${r.d?`（${r.d.toFixed(1)}km）`:''}${r.type!=='终端库'?'【'+r.type+'】':''}`,{sticky:true});
+    // 名称分级显示：中心库/区域库/周转库永久显示，终端库悬停显示（勾选「显示全部名称」则都永久显示）
+    if(r.type!=='终端库'||document.getElementById('showAllNames').checked){
+      L.tooltip({permanent:true,direction:'top',offset:[0,-opt.radius-6],className:'wh-label '+(r.type==='中心库'?'wh-label-center':isRegionRole(r.type)?'wh-label-region':'')})
+        .setLatLng([r.w.lat,r.w.lng]).setContent(esc(r.w.name)).addTo(leafletMap);
+    }
+  });
+  showMapNote(`地图就绪 · ${rows.length} 个仓库 · ${regions.length} 个区域`+(document.getElementById('showDistPairs').checked?` · 距离对 ${Math.min(Object.keys(distMat).length,MAX_DIST_PAIR_LINES)}/${Object.keys(distMat).length} 条`:''));
+}
+
+/* SVG 兜底（Leaflet 加载失败或无底图时） */
+function drawSvg(rows,regions,centers){
+  const svg=document.getElementById('map');
+  svg.style.display='block';
+  const all=rows.map(r=>r.w);
+  if(!all.length){ svg.innerHTML=''; return; }
+  const meanLat=all.reduce((s,w)=>s+w.lat,0)/all.length;
+  const P=all.map(w=>({w,...project(w,meanLat)}));
+  const xs=P.map(p=>p.x), ys=P.map(p=>p.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=46, W=760,H=480;
+  const sx=v=>pad+(v-minX)/((maxX-minX)||1)*(W-2*pad);
+  const sy=v=>H-pad-(v-minY)/((maxY-minY)||1)*(H-2*pad);
+  const regionColor={}; let ci=0;
+  regions.forEach(r=>{ regionColor[r.name]=palette[ci++%palette.length]; });
+  const byName={}; rows.forEach(r=>byName[r.w.name]=r);
+  let g='';
+  rows.forEach(r=>{
+    if(r.type==='终端库'){
+      const reg=byName[r.upper]; if(!reg)return;
+      const a=P.find(p=>p.w===r.w), b=P.find(p=>p.w===reg.w);
+      if(a&&b) g+=`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="${regionColor[r.region]||'#999'}" stroke-width="1" stroke-dasharray="4 5" opacity="0.6"/>`;
+    }else if(isRegionRole(r.type) && r.upper && r.upper!=='—'){
+      const a=P.find(p=>p.w===r.w), b=P.find(p=>p.w===byName[r.upper].w);
+      if(a&&b) g+=`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="#111" stroke-width="2" opacity="0.6"/>`;
+    }
+  });
+  P.forEach(p=>{
+    const r=byName[p.w.name];
+    if(r.type==='中心库'){
+      g+=`<polygon points="${star(sx(p.x),sy(p.y),9,4)}" fill="#111" stroke="#fff" stroke-width="1"/>`;
+    }else if(isRegionRole(r.type)){
+      const cx=sx(p.x),cy=sy(p.y);
+      g+=`<rect x="${cx-6}" y="${cy-6}" width="12" height="12" fill="${regionColor[r.region]||'#2563eb'}" stroke="#fff" stroke-width="1.5"/>`;
+    }else{
+      g+=`<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4.5" fill="${regionColor[r.region]||'#9aa6b2'}" stroke="#fff" stroke-width="1"/>`;
+    }
+    g+=`<text x="${sx(p.x)+7}" y="${sy(p.y)+3}" font-size="10" fill="#374151">${esc(p.w.name)}</text>`;
+  });
+  svg.innerHTML=g;
+}
+function star(cx,cy,R,r){
+  let pts=[];
+  for(let i=0;i<10;i++){const ang=Math.PI/5*i - Math.PI/2; const rad=i%2?r:R;
+    pts.push((cx+Math.cos(ang)*rad).toFixed(1)+','+(cy+Math.sin(ang)*rad).toFixed(1));}
+  return pts.join(' ');
+}
+
+/* ============ 导出 ============ */
+function download(fn,s){
+  const blob=new Blob(['\ufeff'+s],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=fn; a.click();
+}
+function exportCSV(){
+  if(!lastResult){ setStatus('请先点击「开始划分」生成结果','warn'); return; }
+  let s='名称,类型,所属区域,上级仓库,到上级km,容量\n';
+  lastResult.rows.forEach(r=>{
+    const d=r.d?r.d.toFixed(1):'';
+    s+=`${r.w.name},${r.type},${r.region},${r.upper},${d},${r.w.cap}\n`;
+  });
+  download('仓库划分结果.csv',s);
+  setStatus('已导出「仓库划分结果.csv」','ok');
+}
+
+/* 页面加载完成后初始化地图（地图面板常驻，直接显示底图） */
+window.addEventListener('load', ()=>{
+  if(window.L){ try{ drawWarehouses(); }catch(e){ console.warn(e); } }
+});
+</script>
+</body>
+</html>
