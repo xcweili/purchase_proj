@@ -12,7 +12,8 @@
    前端吐 `: keepalive` 心跳，防止中间网关把空闲连接掐断。
 
 配置可用环境变量覆盖：
-    CUSTOMER_MATCH_URL          客户匹配接口地址（缺省 127.0.0.1:8100）
+    CUSTOMER_MATCH_URL          客户匹配接口地址（缺省即客户真实服务；
+                                本地联调时由请求体 url 覆盖为模拟服务地址）
     CUSTOMER_CONNECT_TIMEOUT    建连超时秒数（缺省 10）
     PROXY_HEARTBEAT_TIMEOUT     上游静默多久转发一次心跳（缺省 15）
 """
@@ -30,10 +31,11 @@ logger = logging.getLogger(__name__)
 
 CUSTOMER_MATCH_URL = os.environ.get(
     "CUSTOMER_MATCH_URL",
-    "http://127.0.0.1:8100/api/customer/protocol/match",
+    "http://192.168.1.6:8081/api/allocation/supplier-match/agent/run-stream",
+    #"http://127.0.0.1:8100/api/customer/protocol/match",
 )
 CUSTOMER_CONNECT_TIMEOUT = float(os.environ.get("CUSTOMER_CONNECT_TIMEOUT", "10"))
-PROXY_HEARTBEAT_TIMEOUT = float(os.environ.get("PROXY_HEARTBEAT_TIMEOUT", "15"))
+PROXY_HEARTBEAT_TIMEOUT = float(os.environ.get("PROXY_HEARTBEAT_TIMEOUT", "120"))
 
 EVENT_DONE = "done"
 
@@ -56,16 +58,19 @@ def new_task_id(prefix: str = "match") -> str:
 
 
 async def stream_customer_match(
-    task_id: str,
+    payload: Optional[Dict[str, Any]] = None,
     url: Optional[str] = None,
-    **extra: Any,
+    task_id: str = "",
 ) -> AsyncIterator[StreamItem]:
     """连接客户流式匹配接口，逐事件产出其 SSE 数据帧
 
+    注意：匹配批次号(task_id)由客户侧生成并通过 SSE 事件的 `task_id` 字段返回，
+    因此这里不向客户传递任何任务ID；入参 task_id 仅用于本服务日志关联。
+
     Args:
-        task_id: 我们生成的关联ID（传给客户用于关联事件流）
+        payload: 透传给客户的业务参数（原样作为请求体）
         url: 客户流式接口地址；为空时使用默认配置 CUSTOMER_MATCH_URL
-        **extra: 透传给客户的业务参数（原样进入请求体）
+        task_id: 本服务的任务ID，仅用于日志关联（不写入请求体）
 
     Yields:
         每条事件 dict（已 JSON 解析）；
@@ -76,12 +81,11 @@ async def stream_customer_match(
         httpx.HTTPError: 建连/网络错误
     """
     target_url = url or CUSTOMER_MATCH_URL
-    payload: Dict[str, Any] = {"task_id": task_id}
-    payload.update(extra)
+    body: Dict[str, Any] = dict(payload or {})
 
     logger.info(
-        "[Protocol] 开始调用客户流式接口 url=%s task_id=%s",
-        target_url, task_id,
+        "[Protocol] 开始调用客户流式接口 url=%s 本服务task_id=%s 透传参数=%s",
+        target_url, task_id, body,
     )
 
     # 读超时 None = 不设上限（长任务）；connect 超时保留，避免建连一直等
@@ -97,17 +101,17 @@ async def stream_customer_match(
     event_count = 0
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream("POST", target_url, json=payload) as resp:
+        async with client.stream("POST", target_url, json=body) as resp:
             if resp.status_code != 200:
-                body = await resp.aread()
-                detail = body.decode("utf-8", "ignore")[:200]
+                raw = await resp.aread()
+                detail = raw.decode("utf-8", "ignore")[:200]
                 logger.error(
-                    "[Protocol] 客户接口返回非 200 status=%s body=%s task_id=%s",
+                    "[Protocol] 客户接口返回非 200 status=%s body=%s 本服务task_id=%s",
                     resp.status_code, detail, task_id,
                 )
                 raise RuntimeError(f"客户接口返回 HTTP {resp.status_code}: {detail}")
 
-            logger.info("[Protocol] 已连接客户接口并开始接收事件流 task_id=%s (HTTP %s)",
+            logger.info("[Protocol] 已连接客户接口并开始接收事件流 本服务task_id=%s (HTTP %s)",
                         task_id, resp.status_code)
             lines = resp.aiter_lines()
             while True:
@@ -145,21 +149,22 @@ async def stream_customer_match(
                     if isinstance(ev, dict):
                         etype = ev.get("event")
                         step_id = ev.get("step_id", "")
+                        batch_id = ev.get("task_id")      # 客户侧匹配批次号
                         detail_text = ev.get("title") or ev.get("summary") or ev.get("content") or ev.get("message") or ""
                         if etype == EVENT_DONE:
                             logger.info(
-                                "[Protocol] 收到 done 事件，客户匹配流程完成 task_id=%s 共收到 %d 条事件 耗时 %.1fs",
-                                task_id, event_count, time.monotonic() - start,
+                                "[Protocol] 收到 done 事件，客户匹配流程完成 客户批次号=%s 本服务task_id=%s 共收到 %d 条事件 耗时 %.1fs",
+                                batch_id, task_id, event_count, time.monotonic() - start,
                             )
                         else:
                             logger.info(
-                                "[Protocol] 收到客户事件 #%d event=%s step=%s detail=%s task_id=%s",
-                                event_count, etype, step_id, detail_text, task_id,
+                                "[Protocol] 收到客户事件 #%d event=%s step=%s progress=%s detail=%s 客户批次号=%s 本服务task_id=%s",
+                                event_count, etype, step_id, ev.get("progress"), detail_text, batch_id, task_id,
                             )
                     yield ev
 
             # 走到这里说明上游流已自然结束（没有吐出 done）
             logger.warning(
-                "[Protocol] 客户事件流在未收到 done 的情况下结束 task_id=%s 共收到 %d 条事件 耗时 %.1fs",
+                "[Protocol] 客户事件流在未收到 done 的情况下结束 本服务task_id=%s 共收到 %d 条事件 耗时 %.1fs",
                 task_id, event_count, time.monotonic() - start,
             )

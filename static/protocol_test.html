@@ -41,9 +41,9 @@
     font-family:ui-monospace,Consolas,"Courier New",monospace;font-size:12px;background:#fafcff}
   .tl .line{padding:5px 12px;border-bottom:1px dashed #eef1f5;display:flex;gap:10px}
   .tl .line:last-child{border-bottom:0}
-  .tl .tag{min-width:84px;font-weight:600;flex-shrink:0}
-  .t-step_start{color:#2563eb}.t-step_end{color:#15803d}.t-step_update{color:#b45309}
-  .t-reasoning{color:#6b7280}.t-done{color:#15803d}.t-error{color:#dc2626}.t-conn{color:#7c3aed}.t-other{color:#475569}
+  .tl .tag{min-width:60px;font-weight:600;flex-shrink:0}
+  .t-start{color:#2563eb}.t-stage{color:#0f766e}.t-done{color:#15803d}.t-error{color:#dc2626}
+  .t-conn{color:#7c3aed}.t-other{color:#475569}
   .tl .txt{word-break:break-all}
   .kv{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;font-size:13px;margin-top:10px}
   .kv .k{color:var(--muted)}
@@ -52,12 +52,15 @@
   .verdict.fail{background:#fef2f2;color:var(--err);border:1px solid #fecaca}
   .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
   .note{font-size:12px;color:var(--muted);margin-top:8px}
+  .hist{border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px;background:#fff}
+  .hist-head{font-size:12px;font-weight:600;color:#334155;margin-bottom:6px}
+  .hist .tl{margin-top:0;max-height:220px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>协议匹配流式联调测试</h1>
-  <div class="sub">单一接口流式代理：前端 → 我们后端 /api/protocol/match → 客户流式接口(8100) → 事件实时透传 → done 断开</div>
+  <div class="sub">单接口流式代理：前端 → 我们后端 /api/protocol/match(action) → 客户流式接口 → 事件实时透传 → done 断开</div>
 
   <!-- 对方服务控制 -->
   <div class="panel">
@@ -73,10 +76,9 @@
 
   <!-- 完整流程 -->
   <div class="panel">
-    <h2>② 完整流程测试（单击一步到位，支持断线重连）</h2>
+    <h2>② 完整流程测试（action=start 发起 / action=task 重连）</h2>
     <div class="row" style="margin-bottom:12px">
-      <span class="fld"><label>Task ID（留空自动生成）</label><input type="text" id="taskId" placeholder="重连时填同一ID"></span>
-      <span class="fld" style="flex:1.3"><label>附加参数 params（JSON，原样透传客户接口）</label><input type="text" id="params" value='{"warehouseCode":"WH001","planMonth":"2026-08"}' placeholder='{"key":"value"}'></span>
+      <span class="fld" style="flex:1.3"><label>附加参数 params（JSON，原样透传客户接口）</label><input type="text" id="params" style="width:100%" value='{"warehouseCode":"WH001","planMonth":"2026-08"}' placeholder='{"key":"value"}'></span>
       <span class="fld" style="flex:1.6"><label>对方服务地址（留空用默认 8100 模拟）</label>
         <span style="display:flex;gap:6px;align-items:center">
           <input type="text" id="custUrl" style="flex:1" value="http://127.0.0.1:8100/api/customer/protocol/match" placeholder="http://host:port/api/customer/protocol/match">
@@ -85,23 +87,34 @@
       </span>
     </div>
     <div class="row">
-      <button id="btnRun" class="btn go" onclick="runFlow()">🚀 发起匹配</button>
+      <button id="btnRun" class="btn go" onclick="runFlow('start')">🚀 发起匹配（action=start）</button>
+      <button id="btnReconnect" class="btn ghost" onclick="runFlow('task')">↻ 重连当前任务（action=task）</button>
       <button id="btnStop" class="btn danger" onclick="stopStream()">■ 断开连接（后台继续跑）</button>
       <span>连接方式：</span><span id="modeBadge" class="badge off">未连接</span>
     </div>
-    <div class="note">流程：填 Task ID（留空自动生成）与附加参数 params（原样透传给客户接口）；「测试连通性」可验证下方对方服务地址是否可访问。点「发起匹配」调后端 → 后端调该地址的客户接口 → 长任务期间点「断开连接」模拟刷新/关窗；任务仍在后台运行，之后填同一 Task ID 再点「发起匹配」，后端不再调客户接口，而从断点继续把未收到的事件传回，直到 done 结束。</div>
+    <div class="note">「发起匹配」→ action=start：后端调用客户接口一次并透传 params，收到的客户事件（start/stage/done/error）实时显示；客户返回的匹配批次号(task_id) 由后端从事件中获取并留存。「重连当前任务」→ action=task：后端不再调用客户接口，直接续传未收到的事件（刷新页面/关窗后用它恢复），任务已结束时则回放完整对话。断线期间的事件不会丢，重连时会补发。</div>
     <div id="urlStatus" class="status"></div>
     <div id="runStatus" class="status"></div>
 
     <!-- 时间线 -->
     <div class="tl" id="timeline" style="display:none"></div>
 
-    <!-- 校验结果 -->
+    <!-- 结果 -->
     <div id="summary" style="display:none">
-      <h2 style="margin-top:16px">③ 结果</h2>
+      <h2 style="margin-top:16px">③ 本次结果</h2>
       <div class="kv" id="summaryKv"></div>
       <div id="verdict" class="verdict"></div>
     </div>
+  </div>
+
+  <!-- 历史任务对话 -->
+  <div class="panel">
+    <h2>④ 历史任务对话（后端内存保留最近 5 个任务）</h2>
+    <div class="row">
+      <button class="btn ghost" onclick="loadHistory()">📜 加载历史任务</button>
+      <span class="note" style="margin-top:0">对应接口：GET /api/protocol/history（可带 ?task_id= 查单个）</span>
+    </div>
+    <div id="historyBox"></div>
   </div>
 </div>
 
@@ -171,20 +184,24 @@ async function stopCustomer(){
   await refreshStatus();
 }
 
-/* ============ 时间线 ============ */
-const TAG_CLS = {
-  step_start:'t-step_start', step_end:'t-step_end', step_update:'t-step_update',
-  reasoning:'t-reasoning', done:'t-done', error:'t-error'
-};
+/* ============ 事件渲染 ============ */
+/* 客户事件协议：event=start/stage/done/error；另有后端元事件 conn */
+const TAG_CLS = { start:'t-start', stage:'t-stage', done:'t-done', error:'t-error', conn:'t-conn' };
+
 function eventText(ev){
-  if(ev.event === 'step_update'){
-    const p = ev.progress || {};
-    return '正在计算第 ' + (p.current??'?') + '/' + (p.total??'?') + ' 种分配策略';
-  }
-  const step = ev.step_id ? ('[' + ev.step_id + '] ') : '';
-  return step + (ev.title || ev.content || ev.summary || ev.message || '');
+  const parts = [];
+  if(ev.title) parts.push('【' + ev.title + '】');
+  parts.push(ev.content || ev.summary || ev.message || '');
+  const meta = [];
+  if(ev.step_id != null && ev.step_id !== '') meta.push('step=' + ev.step_id);
+  if(ev.progress != null) meta.push(ev.progress + '%');
+  if(ev.sub_bid_info) meta.push(ev.sub_bid_info);
+  if(ev.cost_ms != null) meta.push(ev.cost_ms + 'ms');
+  if(ev.status) meta.push(ev.status);
+  return parts.join('') + (meta.length ? '   (' + meta.join(' · ') + ')' : '');
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
 function clearTimeline(){
   $('timeline').innerHTML = '';
   $('timeline').style.display = 'none';
@@ -192,12 +209,15 @@ function clearTimeline(){
 function addTimeline(ev){
   const box = $('timeline');
   box.style.display = 'block';
+  box.appendChild(makeLine(ev));
+  box.scrollTop = box.scrollHeight;
+}
+function makeLine(ev){
   const line = document.createElement('div');
   line.className = 'line';
   line.innerHTML = '<span class="tag ' + (TAG_CLS[ev.event]||'t-other') + '">' +
     esc(ev.event) + '</span><span class="txt">' + esc(eventText(ev)) + '</span>';
-  box.appendChild(line);
-  box.scrollTop = box.scrollHeight;
+  return line;
 }
 
 /* ============ 结果面板 ============ */
@@ -216,18 +236,9 @@ function addKv(k, v){
   kv.appendChild(d); kv.appendChild(vv);
 }
 
-/* ============ 完整流程：单接口 + 断线重连 ============ */
+/* ============ 完整流程：action=start / action=task ============ */
 let streamAbort = null;          // 当前连接的 AbortController
 
-function genTaskId(){
-  return 'match-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-}
-function getTaskId(){
-  let id = ($('taskId').value || '').trim();
-  if(!id){ id = genTaskId(); $('taskId').value = id; }
-  localStorage.setItem('pt_task_id', id);
-  return id;
-}
 function getParams(){
   const raw = ($('params').value || '').trim();
   if(!raw) return {};
@@ -237,7 +248,7 @@ function getParams(){
 function getUrl(){
   const url = ($('custUrl').value || '').trim();
   localStorage.setItem('pt_cust_url', url);
-  return url || null;   // 空 -> 后端使用默认地址(8100)
+  return url || null;   // 空 -> 后端使用默认地址
 }
 
 /* 测试对方服务地址连通性（后端代理探测，不触发匹配流程） */
@@ -257,44 +268,49 @@ async function checkUrl(){
 }
 
 const MODE_TEXT = {
-  new:      '新建连接（已调用客户8100）',
-  reconnect:'断线重连（任务执行中，续传，未重复调用8100）',
-  finished: '任务已结束（回放历史事件）'
+  new:      '新建连接（已调用客户接口）',
+  reconnect:'重连（任务执行中，续传，未重复调用客户接口）',
+  finished: '任务已结束（回放历史对话）'
 };
 function renderConn(ev){
-  const txt = MODE_TEXT[ev.mode] || ev.mode;
   const badge = $('modeBadge');
   badge.textContent = (ev.mode === 'new' ? '新建' : (ev.mode === 'reconnect' ? '重连续传' : '历史回放'));
   badge.className = 'badge ' + (ev.mode === 'reconnect' ? 'live' : (ev.mode === 'new' ? 'on' : 'off'));
-  addTimeline({event:'conn', message: txt + ' · task=' + ev.task_id});
-  setRunStatus(ev.mode === 'new' ? '已连接，等待客户事件…' : (ev.mode === 'reconnect' ? '已重连续传，未重复调用8100' : '回放中…'), 'info');
+  addTimeline({event:'conn', content: (MODE_TEXT[ev.mode] || ev.mode) +
+    ' · 客户批次号=' + (ev.batch_id || '待返回') + ' · 本服务task=' + ev.task_id});
+  setRunStatus(ev.mode === 'new' ? '已连接，等待客户事件…'
+    : (ev.mode === 'reconnect' ? '已重连续传，未重复调用客户接口' : '回放中…'), 'info');
 }
 
-async function runFlow(){
-  const taskId = getTaskId();
-  let params;
-  try{ params = getParams(); }
-  catch(e){ setRunStatus(e.message, 'err'); return; }
-  const url = getUrl();
-  let st = {};
-  try{ st = await getStatus(); }catch(e){}
-  if(!st.running){ setRunStatus('请先点击「① 启动对方服务」，再发起匹配', 'warn'); return; }
+async function runFlow(action){
+  let params = {};
+  if(action === 'start'){
+    try{ params = getParams(); }
+    catch(e){ setRunStatus(e.message, 'err'); return; }
+    let st = {};
+    try{ st = await getStatus(); }catch(e){}
+    if(!st.running){ setRunStatus('请先点击「① 启动对方服务」，再发起匹配', 'warn'); return; }
+  }
+  const url = action === 'start' ? getUrl() : null;
 
-  setRunStatus('连接中…');
+  setRunStatus(action === 'start' ? '连接中…' : '重连中…');
   $('btnRun').disabled = true;
+  $('btnReconnect').disabled = true;
   clearTimeline(); clearSummary();
 
   const events = [];
   const abort = new AbortController();
   streamAbort = abort;
+  // action=task 不携带 params/url：后端只做重连，不会调用客户接口
+  const body = action === 'start' ? {action, params, url} : {action};
   try{
     const resp = await fetch('/api/protocol/match', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({task_id: taskId, params, url}),
+      body: JSON.stringify(body),
       signal: abort.signal
     });
-    if(!resp.ok) throw new Error('发起匹配失败 HTTP ' + resp.status);
+    if(!resp.ok) throw new Error('请求失败 HTTP ' + resp.status);
 
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
@@ -321,61 +337,91 @@ async function runFlow(){
       if(finished) break;
     }
   }catch(e){
-    if(!abort.signal.aborted){ addTimeline({event:'error', message: e.message}); setRunStatus('连接异常：' + e.message, 'err'); }
+    if(!abort.signal.aborted){ addTimeline({event:'error', content: e.message}); setRunStatus('连接异常：' + e.message, 'err'); }
   }finally{
     if(streamAbort === abort) streamAbort = null;
     $('btnRun').disabled = false;
+    $('btnReconnect').disabled = false;
   }
 
-  if(!abort.signal.aborted) renderSummary(events, params, url);
+  if(!abort.signal.aborted) renderSummary(events, action, params, url);
+  if(!abort.signal.aborted) loadHistory();
 }
 
-function renderSummary(events, params, url){
+function renderSummary(events, action, params, url){
   const doneEv = events.find(e => e.event === 'done');
   const errEv = events.find(e => e.event === 'error');
   const connEv = events.find(e => e.event === 'conn');
-  const result = doneEv ? (doneEv.result || {}) : {};
+  const startEv = events.find(e => e.event === 'start');
+  const batchId = (startEv && startEv.task_id) || (connEv && connEv.batch_id);
 
   $('summary').style.display = 'block';
-  addKv('Task ID', (doneEv && doneEv.task_id) || (connEv && connEv.task_id) || '-');
+  addKv('请求动作', action === 'start' ? 'start（发起新匹配）' : 'task（重连当前任务）');
+  addKv('客户匹配批次号', batchId || '-');
+  addKv('本服务 task_id', (connEv && connEv.task_id) || '-');
   addKv('连接方式', connEv ? (MODE_TEXT[connEv.mode] || connEv.mode) : '-');
-  addKv('透传参数', JSON.stringify(params || {}));
-  addKv('对方服务地址', url || '默认');
+  if(action === 'start'){
+    addKv('透传参数', JSON.stringify(params || {}));
+    addKv('对方服务地址', url || '默认');
+  }
   addKv('收到事件数', String(events.filter(e => e.event !== 'conn').length));
-  addKv('结束事件', doneEv ? 'done' : (errEv ? 'error' : '无'));
-  if(Object.keys(result).length) addKv('最终结果', JSON.stringify(result));
+  addKv('结束状态', doneEv ? 'done（完成并落库）' : (errEv ? 'error（任务失败）' : '未结束'));
 
   const verdict = $('verdict');
-  if(doneEv && Object.keys(result).length){
+  if(doneEv){
     verdict.className = 'verdict pass';
-    verdict.textContent = '✓ PASS：匹配完成，事件流与最终结果正常';
+    verdict.textContent = '✓ PASS：客户事件流正常结束（收到 done）';
     setRunStatus('流程测试通过', 'ok');
   }else{
     verdict.className = 'verdict fail';
-    verdict.textContent = '✗ FAIL：' + (errEv ? (errEv.message || '匹配出错') : '未收到 done 事件（流中断）');
+    verdict.textContent = '✗ FAIL：' + (errEv ? (errEv.content || '匹配出错') : '未收到 done 事件（流中断）');
     setRunStatus('流程测试未通过', 'err');
   }
 }
 
-/* 仅断开连接，后台任务继续跑；之后点「发起匹配」即可续传（等价于刷新页面后重连） */
+/* 仅断开连接，后台任务继续跑；之后点「重连当前任务」即可续传（等价于刷新页面后重连） */
 function stopStream(){
   if(streamAbort) streamAbort.abort();
-  addTimeline({event:'conn', message:'—— 已断开连接，后台任务继续运行；刷新页面后点「发起匹配」可续传 ——'});
+  addTimeline({event:'conn', content:'—— 已断开连接，后台任务继续运行；刷新页面后点「重连当前任务」可续传 ——'});
   $('modeBadge').className = 'badge off';
   $('modeBadge').textContent = '已断开';
   setRunStatus('已断开（任务后台继续运行）', 'warn');
 }
 
-/* 页面加载：恢复上次 task_id / 服务地址 + 刷新状态 */
-(function(){
-  const saved = localStorage.getItem('pt_task_id');
-  if(saved){
-    $('taskId').value = saved;
-    setRunStatus('检测到上次 Task ID：' + saved + '。若任务仍在执行，直接点「发起匹配」即可断线重连续传', 'info');
+/* ============ 历史任务对话 ============ */
+async function loadHistory(){
+  const r = await api('/api/protocol/history');
+  const tasks = (r.body && r.body.data && r.body.data.tasks) || [];
+  const box = $('historyBox');
+  box.innerHTML = '';
+  if(!tasks.length){
+    box.innerHTML = '<div class="note">暂无历史任务</div>';
+    return;
   }
+  for(const t of tasks){
+    const sec = document.createElement('div');
+    sec.className = 'hist';
+    const head = document.createElement('div');
+    head.className = 'hist-head';
+    head.textContent = '批次号 ' + (t.batch_id || '-') + ' ｜ 本服务task ' + t.task_id +
+      ' ｜ ' + (t.done ? (t.error ? '失败' : '已完成') : '执行中') + ' ｜ ' + t.event_count + ' 条事件';
+    sec.appendChild(head);
+    const tl = document.createElement('div');
+    tl.className = 'tl';
+    tl.style.display = 'block';
+    for(const ev of (t.events || [])) tl.appendChild(makeLine(ev));
+    sec.appendChild(tl);
+    box.appendChild(sec);
+  }
+}
+
+/* 页面加载：恢复服务地址 + 刷新状态 */
+(function(){
   const savedUrl = localStorage.getItem('pt_cust_url');
   if(savedUrl) $('custUrl').value = savedUrl;
   refreshStatus();
+  setRunStatus('提示：若页面是刷新/重开进来的，且上一次匹配仍在执行，请点「重连当前任务」续传', 'info');
+  loadHistory();
 })();
 </script>
 </body>

@@ -1,19 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-模拟客户方服务（形态C：客户暴露流式匹配接口，我们后端透明代理转发）
-====================================================================
+模拟客户方服务（客户暴露流式匹配接口，我们后端透明代理转发）
+==============================================================
 模拟"客户那边部署的协议匹配服务"，对外暴露一个【流式(SSE)】匹配入口：
     POST /api/customer/protocol/match
 
-执行完成整流程：查询计划 -> 查协议商 -> 阶梯判断 -> 分配计算 -> 输出结果，
-每走一步就把事件以 SSE 的 `data:` 帧实时推出去，直到最后推一帧 `done`（携带最终结果）。
+匹配批次号(task_id)由本服务自行生成，并通过每个 SSE 事件回传；请求体为调用方
+透传的业务参数，本模拟服务不强制约束其字段。
 
-对接说明（对客户而言本文件是"他们需要实现什么"的最小示例）：
-- 匹配过程可能长达 20 分钟甚至更久，因此务必：
-    1. 用 SSE（text/event-stream）逐步吐事件，别等全部算完才一次性返回；
-    2. 长时间无事件时（例如某个步骤要跑十几分钟），主动吐 `: keepalive` 心跳，
-       避免中间网关/代理把空闲连接掐断；
-    3. 最终必须吐一帧 event=done 表示结束，携带 result 供前端展示。
+事件协议（每个事件是一条 `data:` 帧，内容为 JSON 对象）：
+| 字段         | 类型        | 必填 | 取值 / 含义                                                        |
+| ------------ | ----------- | ---- | ------------------------------------------------------------------ |
+| event        | string      | 是   | start 任务已受理 / stage 进度节点 / done 完成并落库 / error 任务失败 |
+| task_id      | string      | 是   | 匹配批次号，全程不变                                                |
+| content      | string      | 是   | 人类可读的正文（可直接用于前端展示）                                |
+| step_id      | int/null    | 否   | 引擎步骤号（同一分标引擎实例内递增）                                |
+| title        | string/null | 否   | 阶段标题（如「数据准备」「Phase0 分段完成」「方案「均衡」开始」）    |
+| desc         | string/null | 否   | 结构化描述（当前未使用）                                            |
+| status       | string/null | 否   | processing / success（error 事件用 error）                         |
+| progress     | int/null    | 否   | 0~100（引擎内单分标粒度；全局进度由各阶段事件顺序体现）             |
+| summary      | string/null | 否   | 阶段汇总文案（引擎结束事件使用）                                    |
+| cost_ms      | long/null   | 否   | 阶段耗时毫秒                                                        |
+| sub_bid_info | string/null | 否   | 分标信息；方案内按分标并行执行，事件可能交错，靠它区分来自哪个分标；空=方案/全局级事件 |
+
+长耗时段落用于验证"客户端断开/刷新后重连续传"，可用环境变量调快慢：
+    MOCK_LONG_CALC_ROUNDS / MOCK_LONG_CALC_INTERVAL
 
 运行：
     python mock_customer_api.py        # 默认 127.0.0.1:8100
@@ -21,22 +32,26 @@
 import asyncio
 import json
 import os
+import time
+import uuid
+from typing import Any, Dict
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
-app = FastAPI(title="模拟客户协议匹配服务", version="2.1")
+app = FastAPI(title="模拟客户协议匹配服务", version="3.0")
 
 # 长耗时步骤参数（可用环境变量覆盖，便于自动化测试时缩短时长）
 LONG_CALC_ROUNDS = int(os.environ.get("MOCK_LONG_CALC_ROUNDS", "15"))
 LONG_CALC_INTERVAL = float(os.environ.get("MOCK_LONG_CALC_INTERVAL", "2"))
 
+# 模拟分标：方案内按分标并行执行，事件会交错
+SUB_BIDS = ["分标A", "分标B", "分标C"]
 
-class MatchRequest(BaseModel):
-    task_id: str = Field(..., description="任务ID，由采购智能体生成并传入，用于关联事件流")
-    warehouse_code: str = Field(default="WH001", description="仓库编码")
-    plan_month: str = Field(default="2026-08", description="计划月份（YYYY-MM）")
+
+def new_batch_id() -> str:
+    """生成匹配批次号（真实场景由客户侧匹配引擎生成，全程不变）"""
+    return "BID-" + time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4].upper()
 
 
 def _sse(ev: dict) -> str:
@@ -49,22 +64,19 @@ def _keepalive() -> str:
     return ": keepalive\n\n"
 
 
-def _ev(event: str, task_id: str, **kw) -> dict:
-    d = {"event": event, "task_id": task_id}
+def _ev(event: str, task_id: str, content: str, **kw) -> dict:
+    """构造一个符合事件协议的 SSE 事件对象（event/task_id/content 必填）"""
+    d = {"event": event, "task_id": task_id, "content": content}
     d.update(kw)
     return d
 
 
 # ---------------- 以下为【模拟】的客户业务函数（真实场景换成他们的逻辑） ----------------
 
-def do_query_plans(warehouse_code: str, plan_month: str) -> list:
-    """【模拟】查询补货计划"""
-    return [
-        {"plan_id": f"JH-{plan_month.replace('-', '')}-{i:03d}",
-         "material_code": f"M00{i}",
-         "qty": 100 + i * 10}
-        for i in range(1, 13)
-    ]
+def do_query_plans() -> list:
+    """【模拟】读取补货计划"""
+    return [{"plan_id": f"JH-{i:03d}", "material_code": f"M00{i}", "qty": 100 + i * 10}
+            for i in range(1, 13)]
 
 
 def do_query_suppliers() -> list:
@@ -78,105 +90,74 @@ def do_query_suppliers() -> list:
     ]
 
 
-def do_ladder_check(suppliers: list) -> list:
-    """【模拟】按 20%/50%/80% 阶梯判断可选供应商"""
-    return [s for s in suppliers if s["exec_ratio"] < 0.80]
-
-
 # ---------------- 匹配入口（流式 SSE） ----------------
 
 @app.post("/api/customer/protocol/match")
-async def protocol_match(request: MatchRequest):
-    """客户流式匹配接口：逐步吐出过程事件，以 done（携带结果）结束"""
+async def protocol_match(payload: Dict[str, Any] = Body(default={})):
+    """客户流式匹配接口：按事件协议逐步吐事件，以 done（完成并落库）结束"""
 
     async def event_generator():
-        task_id = request.task_id
+        batch_id = new_batch_id()     # 匹配批次号：客户侧生成，全程不变
+        step = 0
+        t0 = time.monotonic()
+
+        def cost_ms() -> int:
+            """当前阶段累计耗时（毫秒）"""
+            return int((time.monotonic() - t0) * 1000)
+
+        params_desc = "、".join(f"{k}={v}" for k, v in payload.items()) or "无"
+
         try:
-            # ---- 步骤1：查询补货计划 ----
-            yield _sse(_ev("step_start", task_id, step_id="query_plans",
-                           title="查询补货计划", desc="从计划表读取需求物料清单", status="running"))
-            await asyncio.sleep(0.2)
-            plans = do_query_plans(request.warehouse_code, request.plan_month)
-            yield _sse(_ev("reasoning", task_id, step_id="query_plans",
-                           content=f"共查询到 {len(plans)} 条补货计划，涉及 8 种物料"))
-            yield _sse(_ev("step_end", task_id, step_id="query_plans", title="查询补货计划",
-                           status="success", summary=f"共查询到 {len(plans)} 条补货计划，涉及 8 种物料",
-                           cost_ms=200))
+            # ① start：任务已受理（同时回显收到的透传参数，便于验证透传链路）
+            yield _sse(_ev("start", batch_id,
+                           f"任务已受理，匹配批次号 {batch_id}（收到透传参数：{params_desc}）",
+                           title="任务受理", status="processing", progress=0))
 
-            # ---- 步骤2：查询协议商 ----
-            yield _sse(_ev("step_start", task_id, step_id="query_suppliers",
-                           title="查询协议商", desc="查询物料对应的协议供应商及执行比例", status="running"))
+            # ② 数据准备
+            step += 1
+            yield _sse(_ev("stage", batch_id, "正在读取补货计划与协议供应商数据",
+                           step_id=step, title="数据准备", status="processing"))
             await asyncio.sleep(0.2)
+            plans = do_query_plans()
             suppliers = do_query_suppliers()
-            yield _sse(_ev("reasoning", task_id, step_id="query_suppliers",
-                           content=f"共 {len(suppliers)} 家协议供应商可参与匹配，下一步按执行比例做阶梯判断"))
-            yield _sse(_ev("step_end", task_id, step_id="query_suppliers", title="查询协议商",
-                           status="success", summary=f"共 {len(suppliers)} 家协议供应商可参与匹配",
-                           cost_ms=200))
+            yield _sse(_ev("stage", batch_id,
+                           f"数据准备完成：补货计划 {len(plans)} 条，协议供应商 {len(suppliers)} 家",
+                           step_id=step, title="数据准备", status="success",
+                           progress=100, summary="数据准备完成", cost_ms=cost_ms()))
 
-            # ---- 步骤3：执行比例阶梯判断 ----
-            yield _sse(_ev("step_start", task_id, step_id="ladder_check",
-                           title="执行比例阶梯判断", desc="按 20%/50%/80% 阶梯确认可选供应商", status="running"))
-            await asyncio.sleep(0.2)
-            candidates = do_ladder_check(suppliers)
-            yield _sse(_ev("reasoning", task_id, step_id="ladder_check",
-                           content=f"其中 {len(candidates)} 家执行比例低于 80% 阶梯，纳入本轮匹配候选"))
-            yield _sse(_ev("step_end", task_id, step_id="ladder_check", title="执行比例阶梯判断",
-                           status="success", summary=f"{len(candidates)} 家供应商执行比例低于 80% 阶梯，优先选择",
-                           cost_ms=200))
+            # ③ Phase0 分段完成
+            step += 1
+            yield _sse(_ev("stage", batch_id, "需求已按物料分段完成，进入方案匹配",
+                           step_id=step, title="Phase0 分段完成", status="success",
+                           progress=100, summary="Phase0 分段完成", cost_ms=cost_ms()))
 
-            # ---- 步骤4：分配计算（带循环进度，展示 progress 效果） ----
-            yield _sse(_ev("step_start", task_id, step_id="allocate",
-                           title="分配计算", desc="计算各策略下的分配数量与金额", status="running"))
-            for i in range(1, 4):
-                yield _sse(_ev("step_update", task_id, step_id="allocate",
-                               progress={"current": i, "total": 3},
-                               content=f"正在计算第 {i}/3 种分配策略"))
-                await asyncio.sleep(0.15)
-            alloc = {"strategies": 3, "plans_allocated": len(plans), "suppliers_used": len(candidates)}
-            yield _sse(_ev("step_end", task_id, step_id="allocate", title="分配计算",
-                           status="success", summary="均衡/成本/配送 三种策略计算完成", cost_ms=450))
+            # ④ 方案「均衡」开始（方案内按分标并行，事件会交错）
+            step += 1
+            yield _sse(_ev("stage", batch_id, "方案「均衡」开始，分标并行执行匹配",
+                           step_id=step, title="方案「均衡」开始", status="processing", progress=0))
 
-            # ---- 长耗时步骤：模拟真实客户"长时间计算"（约 LONG_CALC_ROUNDS*INTERVAL 秒）
-            #      每轮吐一个进度事件 + 一个心跳，方便测试页面刷新 / 客户端断开后重连续传 ----
-            yield _sse(_ev("step_start", task_id, step_id="deep_calc",
-                           title="深度计算", desc=f"模拟长时间计算（约 {LONG_CALC_ROUNDS * LONG_CALC_INTERVAL:.0f}s），"
-                                                  "期间可刷新页面/关窗重连验证续传能力", status="running"))
+            # ⑤ 长时间计算：每轮吐进度 + 心跳，便于测试断开/刷新后重连续传
             for i in range(1, LONG_CALC_ROUNDS + 1):
                 yield _keepalive()
                 await asyncio.sleep(LONG_CALC_INTERVAL)
-                yield _sse(_ev("step_update", task_id, step_id="deep_calc",
-                               progress={"current": i, "total": LONG_CALC_ROUNDS},
-                               content=f"深度计算完成 {i}/{LONG_CALC_ROUNDS} 轮"))
-            yield _sse(_ev("step_end", task_id, step_id="deep_calc", title="深度计算",
-                           status="success", summary="深度计算完成",
-                           cost_ms=int(LONG_CALC_ROUNDS * LONG_CALC_INTERVAL * 1000)))
+                sub_bid = SUB_BIDS[(i - 1) % len(SUB_BIDS)]
+                yield _sse(_ev("stage", batch_id,
+                               f"{sub_bid} 已完成 {i}/{LONG_CALC_ROUNDS} 轮匹配计算",
+                               step_id=step, title="方案「均衡」执行中", status="processing",
+                               progress=int(i * 100 / LONG_CALC_ROUNDS), sub_bid_info=sub_bid))
 
-            # ---- 步骤5：输出最终结果 ----
-            yield _sse(_ev("step_start", task_id, step_id="output",
-                           title="输出最终结果", desc="生成协议匹配结果", status="running"))
-            await asyncio.sleep(0.1)
-            result = {
-                "task_id": task_id,
-                "warehouse_code": request.warehouse_code,
-                "plan_month": request.plan_month,
-                "plans": len(plans),
-                "suppliers": len(suppliers),
-                "candidates": len(candidates),
-                "allocate": alloc,
-                "deep_calc_rounds": LONG_CALC_ROUNDS,
-                "matched": 10,
-                "partial": 1,
-                "unmet": 1,
-            }
-            yield _sse(_ev("step_end", task_id, step_id="output", title="输出最终结果",
-                           status="success", summary="匹配完成，结果已保存", cost_ms=100))
+            # ⑥ 方案「均衡」完成
+            yield _sse(_ev("stage", batch_id, "方案「均衡」分标匹配全部完成",
+                           step_id=step, title="方案「均衡」完成", status="success",
+                           progress=100, summary="方案「均衡」完成", cost_ms=cost_ms()))
 
-            # ---- 完成（携带最终结果） ----
-            yield _sse(_ev("done", task_id, status="success",
-                           summary="协议匹配流程全部完成", result=result))
+            # ⑦ done：完成并落库
+            yield _sse(_ev("done", batch_id,
+                           f"协议匹配流程全部完成，结果已落库（批次号 {batch_id}）",
+                           status="success", progress=100,
+                           summary="协议匹配流程全部完成", cost_ms=cost_ms()))
         except Exception as e:  # noqa: BLE001 - 客户侧兜底
-            yield _sse(_ev("error", task_id, message=f"匹配失败: {e}"))
+            yield _sse(_ev("error", batch_id, f"匹配失败: {e}", status="error"))
 
     return StreamingResponse(
         event_generator(),

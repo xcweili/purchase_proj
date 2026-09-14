@@ -42,13 +42,16 @@ purchase_proj/
 ## 环境准备
 
 ### 后端环境
+
 1. **Python环境**：Python 3.8+
 2. **依赖包安装**：
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 启动服务
+
 ```bash
 # 开发模式（带热重载）
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
@@ -67,17 +70,17 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 
 ### 核心数据表
 
-| 表名 | 用途 | 关键字段 |
-|------|------|----------|
-| **mt_base_warehouse_info | 仓库信息 | fd_warehouse_code, fd_warehouse_name, fd_warehouse_type |
-| **mt_stock_use_list_plan_two | 领用单计划 | fd_plan_id, fd_material_code, fd_requisition_num, fd_requisition_date |
-| **w_stock_info_0808 | 库存信息 | material_code, stock_qty, loc_code, source_type |
-| **mt_allocation_result** | 调配结果 | fd_plan_id (唯一索引), fd_strategy, fd_source_type, fd_project_unit, fd_demand_time |
-| **mt_supplier_match_result** | 供应商匹配结果 | fd_material_code, fd_supplier_results |
-| **mt_historical_outbound** | 历史出库 | fd_material_code, fd_warehouse_code, fd_outbound_qty, fd_posting_month |
-| **mt_historical_analysis** | 历史分析结果 | fd_material_code, fd_warehouse_code, fd_tech_id, fd_historical_avg_qty |
-| **mt_protocol_stock** | 协议库存 | fd_material_code, fd_supplier_name, fd_available_qty |
-| **mt_framework_agreement** | 框架协议 | fd_agreement_no, fd_supplier, fd_execute_rate |
+| 表名                               | 用途           | 关键字段                                                                            |
+| ---------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| **mt_base_warehouse_info           | 仓库信息       | fd_warehouse_code, fd_warehouse_name, fd_warehouse_type                             |
+| **mt_stock_use_list_plan_two       | 领用单计划     | fd_plan_id, fd_material_code, fd_requisition_num, fd_requisition_date               |
+| **w_stock_info_0808                | 库存信息       | material_code, stock_qty, loc_code, source_type                                     |
+| **mt_allocation_result**     | 调配结果       | fd_plan_id (唯一索引), fd_strategy, fd_source_type, fd_project_unit, fd_demand_time |
+| **mt_supplier_match_result** | 供应商匹配结果 | fd_material_code, fd_supplier_results                                               |
+| **mt_historical_outbound**   | 历史出库       | fd_material_code, fd_warehouse_code, fd_outbound_qty, fd_posting_month              |
+| **mt_historical_analysis**   | 历史分析结果   | fd_material_code, fd_warehouse_code, fd_tech_id, fd_historical_avg_qty              |
+| **mt_protocol_stock**        | 协议库存       | fd_material_code, fd_supplier_name, fd_available_qty                                |
+| **mt_framework_agreement**   | 框架协议       | fd_agreement_no, fd_supplier, fd_execute_rate                                       |
 
 详细表结构说明请参考 [数据库表结构说明.md](./数据库表结构说明.md)
 
@@ -94,18 +97,20 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 **功能说明**：根据计划需求和现有库存进行智能仓库调配，支持多种匹配策略。
 
 **请求参数（Body (JSON)**
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| strategy | string | 否 | 匹配策略：`time`(按时间)、`cost`(按成本)、`stock`(按库存)、`emerg`(应急)，默认 `time` |
-| warehouseCode | string | 否 | 仓库编码筛选 |
-| sourceType | string | 否 | 库存类型筛选 |
-| projectUnit | string | 否 | 项目单位筛选 |
-| demandStartDate | string | 否 | 需求开始时间（格式 YYYY-MM-DD） |
-| demandEndDate | string | 否 | 需求结束时间（格式 YYYY-MM-DD） |
-| planType | string | 否 | 计划类型筛选 |
-| materialCodes | array[string] | 否 | 物料编码列表，不传则查询所有计划 |
+
+| 参数名          | 类型          | 必填 | 说明                                                                                            |
+| --------------- | ------------- | ---- | ----------------------------------------------------------------------------------------------- |
+| strategy        | string        | 否   | 匹配策略：`time`(按时间)、`cost`(按成本)、`stock`(按库存)、`emerg`(应急)，默认 `time` |
+| warehouseCode   | string        | 否   | 仓库编码筛选                                                                                    |
+| sourceType      | string        | 否   | 库存类型筛选                                                                                    |
+| projectUnit     | string        | 否   | 项目单位筛选                                                                                    |
+| demandStartDate | string        | 否   | 需求开始时间（格式 YYYY-MM-DD）                                                                 |
+| demandEndDate   | string        | 否   | 需求结束时间（格式 YYYY-MM-DD）                                                                 |
+| planType        | string        | 否   | 计划类型筛选                                                                                    |
+| materialCodes   | array[string] | 否   | 物料编码列表，不传则查询所有计划                                                                |
 
 **请求示例**
+
 ```json
 {
   "strategy": "time",
@@ -114,6 +119,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 **处理流程**
+
 1. 从 `mt_stock_use_list_plan_two` 表查询符合条件的计划
    - 查询条件：项目单位、需求时间范围、计划类型、物料编码
    - 关键字段：fd_plan_id, fd_material_code, fd_requisition_num, fd_unit_name, fd_requisition_date, fd_Item_Type
@@ -127,6 +133,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
    - 字段：fd_plan_id, fd_strategy, fd_source_type, fd_project_unit, fd_demand_time, fd_create_time
 
 **响应示例**
+
 ```json
 {
   "code": 200,
@@ -152,16 +159,18 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 **功能说明**：基于历史出库数据进行库存分析，支持按时间、仓库层级、物料编码筛选分析。
 
 **请求参数（Body (JSON)**
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| startDate | string | 否 | 开始日期（格式 YYYYMM），用于筛选历史出库数据 |
-| endDate | string | 否 | 结束日期（格式 YYYYMM），用于筛选历史出库数据 |
-| inventoryLevels | array[string] | 否 | 库存层级列表，如 ['区域库', '周转库', '终端库'] |
-| materialCodes | array[string] | 否 | 物料编码列表 |
-| seasonFactorWeight | float | 否 | 季节因子权重（暂未使用） |
-| safetyRedundancyRatio | float | 否 | 安全冗余比例（暂未使用） |
+
+| 参数名                | 类型          | 必填 | 说明                                            |
+| --------------------- | ------------- | ---- | ----------------------------------------------- |
+| startDate             | string        | 否   | 开始日期（格式 YYYYMM），用于筛选历史出库数据   |
+| endDate               | string        | 否   | 结束日期（格式 YYYYMM），用于筛选历史出库数据   |
+| inventoryLevels       | array[string] | 否   | 库存层级列表，如 ['区域库', '周转库', '终端库'] |
+| materialCodes         | array[string] | 否   | 物料编码列表                                    |
+| seasonFactorWeight    | float         | 否   | 季节因子权重（暂未使用）                        |
+| safetyRedundancyRatio | float         | 否   | 安全冗余比例（暂未使用）                        |
 
 **请求示例**
+
 ```json
 {
   "startDate": "202401",
@@ -172,6 +181,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 **处理流程**
+
 1. 从 `mt_base_warehouse_info` 表按库存层级筛选仓库列表
    - 查询条件：仓库类型
 2. 获取物料编码列表（用户输入或从历史出库表获取全部）
@@ -182,12 +192,14 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 7. 保存分析结果
 
 **查询的表**
+
 - `mt_base_warehouse_info`
 - `mt_historical_outbound`
 - `mt_historical_analysis`
 - `w_stock_info_0808`
 
 **响应示例**
+
 ```json
 {
   "code": 200,
@@ -208,17 +220,19 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 **功能说明**：根据协议库存和供应商信息，为补货计划匹配最优供应商，返回三种策略方案。
 
 **请求参数（Body (JSON)**
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| plans | array[object] | 否 | 补货计划列表，不传则从数据库查询 |
-| plans[].planId | string | 否 | 计划ID |
-| plans[].materialCode | string | 是 | 物料编码 |
-| plans[].materialDesc | string | 否 | 物料描述 |
-| plans[].demandQty | float | 是 | 需求数量 |
-| plans[].warehouseCode | string | 否 | 仓库编码 |
-| plans[].techSpecId | string | 否 | 技术规范ID |
+
+| 参数名                | 类型          | 必填 | 说明                             |
+| --------------------- | ------------- | ---- | -------------------------------- |
+| plans                 | array[object] | 否   | 补货计划列表，不传则从数据库查询 |
+| plans[].planId        | string        | 否   | 计划ID                           |
+| plans[].materialCode  | string        | 是   | 物料编码                         |
+| plans[].materialDesc  | string        | 否   | 物料描述                         |
+| plans[].demandQty     | float         | 是   | 需求数量                         |
+| plans[].warehouseCode | string        | 否   | 仓库编码                         |
+| plans[].techSpecId    | string        | 否   | 技术规范ID                       |
 
 **请求示例**
+
 ```json
 {
   "plans": [
@@ -235,6 +249,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 **处理流程**
+
 1. 从 `mt_stock_use_list_plan_two` 表查询计划（如果没传 plans）
 2. 对每个计划：
    - 从 `w_stock_info_0808` 表获取物料描述
@@ -247,6 +262,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 4. 保存结果到 `mt_supplier_match_result` 表
 
 **查询的表**
+
 - `mt_stock_use_list_plan_two`
 - `mt_base_warehouse_info
 - `mt_protocol_stock`
@@ -254,6 +270,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 - `mt_protocol_execution`
 
 **响应示例**
+
 ```json
 {
   "code": 200,
@@ -284,22 +301,26 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 **功能说明**：查询已保存的供应商匹配结果。
 
 **请求参数（Query）**
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| material_code | string | 否 | 物料编码筛选 |
-| match_status | string | 否 | 匹配状态筛选 |
-| strategy | string | 否 | 策略筛选 |
-| limit | int | 否 | 限制返回数量，默认 100 |
+
+| 参数名        | 类型   | 必填 | 说明                   |
+| ------------- | ------ | ---- | ---------------------- |
+| material_code | string | 否   | 物料编码筛选           |
+| match_status  | string | 否   | 匹配状态筛选           |
+| strategy      | string | 否   | 策略筛选               |
+| limit         | int    | 否   | 限制返回数量，默认 100 |
 
 **请求示例**
+
 ```
 GET /api/supplier/match/results?material_code=500050546&limit=50
 ```
 
 **查询的表**
+
 - `mt_supplier_match_result`
 
 **响应示例**
+
 ```json
 {
   "code": 200,
@@ -320,11 +341,13 @@ GET /api/supplier/match/results?material_code=500050546&limit=50
 **功能说明**：流式对话接口，调用 LLM 进行通用对话。
 
 **请求参数（Body (JSON)**
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| message | string | 是 | 用户消息 |
+
+| 参数名  | 类型   | 必填 | 说明     |
+| ------- | ------ | ---- | -------- |
+| message | string | 是   | 用户消息 |
 
 **请求示例**
+
 ```json
 {
   "message": "如何进行库存预警分析？"
@@ -342,6 +365,7 @@ GET /api/supplier/match/results?material_code=500050546&limit=50
 **功能说明**：服务健康检查接口。
 
 **响应示例**
+
 ```json
 {
   "status": "ok"
@@ -352,18 +376,19 @@ GET /api/supplier/match/results?material_code=500050546&limit=50
 
 ## 接口流程总结
 
-| 接口 | 查询的表 | 保存的表 | 功能 |
-|------|----------|----------|------|
-| `/api/allocation/match | mt_stock_use_list_plan_two, w_stock_info_0808 | mt_allocation_result | 智能调配 |
-| `/api/inventory/analyze | mt_base_warehouse_info, mt_historical_outbound, mt_historical_analysis, w_stock_info_0808 | - | 库存分析 |
-| `/api/supplier/match` | mt_stock_use_list_plan_two, mt_base_warehouse_info, mt_protocol_stock | mt_supplier_match_result | 供应商匹配 |
-| `/api/supplier/match/results` | mt_supplier_match_result | - | 查询匹配结果 |
+| 接口                            | 查询的表                                                                                  | 保存的表                 | 功能         |
+| ------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------ | ------------ |
+| `/api/allocation/match          | mt_stock_use_list_plan_two, w_stock_info_0808                                             | mt_allocation_result     | 智能调配     |
+| `/api/inventory/analyze         | mt_base_warehouse_info, mt_historical_outbound, mt_historical_analysis, w_stock_info_0808 | -                        | 库存分析     |
+| `/api/supplier/match`         | mt_stock_use_list_plan_two, mt_base_warehouse_info, mt_protocol_stock                     | mt_supplier_match_result | 供应商匹配   |
+| `/api/supplier/match/results` | mt_supplier_match_result                                                                  | -                        | 查询匹配结果 |
 
 ---
 
 ## CURL 测试示例
 
 ### 测试智能调配接口
+
 ```bash
 curl -X POST "http://localhost:8000/api/allocation/match" \
   -H "Content-Type: application/json" \
@@ -371,6 +396,7 @@ curl -X POST "http://localhost:8000/api/allocation/match" \
 ```
 
 ### 测试库存分析接口
+
 ```bash
 curl -X POST "http://localhost:8000/api/inventory/analyze" \
   -H "Content-Type: application/json" \
@@ -378,6 +404,7 @@ curl -X POST "http://localhost:8000/api/inventory/analyze" \
 ```
 
 ### 测试供应商匹配接口
+
 ```bash
 curl -X POST "http://localhost:8000/api/supplier/match" \
   -H "Content-Type: application/json" \
@@ -385,6 +412,7 @@ curl -X POST "http://localhost:8000/api/supplier/match" \
 ```
 
 ### 测试供应商匹配结果查询
+
 ```bash
 curl "http://localhost:8000/api/supplier/match/results?material_code=500050546&limit=10"
 ```
@@ -394,6 +422,7 @@ curl "http://localhost:8000/api/supplier/match/results?material_code=500050546&l
 ## 配置说明
 
 ### LLM 配置（src/services/llm_service.py）
+
 - 模型：`qwen3.5-122b-a10b-fp8`
 - API 配置：根据实际环境修改
 
@@ -412,7 +441,6 @@ curl "http://localhost:8000/api/supplier/match/results?material_code=500050546&l
 
 ## 版本历史
 
-| 版本 | 日期 | 说明 |
-|------|------|------|
+| 版本  | 日期       | 说明     |
+| ----- | ---------- | -------- |
 | V10.0 | 2026-05-02 | 当前版本 |
-

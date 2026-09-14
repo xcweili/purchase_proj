@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import asyncio
 import httpx
+from enum import Enum
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -103,7 +104,7 @@ supplier_match_stream_service = SupplierMatchStreamService(real_db, llm_service.
 # ============================================
 # 协议匹配服务导入
 # ============================================
-from .services.protocol_match_client import EVENT_DONE, new_task_id, KEEPALIVE
+from .services.protocol_match_client import EVENT_DONE, KEEPALIVE
 from .services.protocol_task_registry import protocol_task_registry, run_worker
 from .services.mock_customer_manager import mock_customer_manager
 
@@ -136,8 +137,14 @@ class SupplierMatchRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
 
+class ProtocolAction(str, Enum):
+    """协议匹配接口动作：start=发起新匹配；task=重连当前任务"""
+    START = "start"
+    TASK = "task"
+
 class ProtocolMatchRequest(BaseModel):
-    task_id: Optional[str] = Field(default=None, description="任务ID，为空时自动生成；重复携带同一 task_id 调用会断线续传（不重复调用客户接口）")
+    action: ProtocolAction = Field(default=ProtocolAction.START,
+        description="start=发起新匹配（调用客户接口）；task=重连当前任务（不再调用客户接口，续传/回放）")
     params: Optional[Dict[str, Any]] = Field(default=None, description="透传给客户接口的业务参数对象（任意属性，原样进入请求体）")
     url: Optional[str] = Field(default=None, description="客户流式接口地址；为空使用默认配置（测试页可填写真实/模拟地址）")
 
@@ -461,70 +468,110 @@ async def shutdown_event():
 # ============================================
 # 协议匹配接口（单接口流式代理，支持断线重连续传）
 # ============================================
+# 流式响应统一头部：禁用缓存/缓冲，保证事件实时到达前端
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse_data(obj: Dict[str, Any]) -> str:
+    """把一个事件对象编码成一条 SSE data 帧"""
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _task_digest(task) -> Dict[str, Any]:
+    """任务摘要（含完整事件对话），用于历史任务接口返回"""
+    events = task.events()
+    return {
+        "task_id": task.task_id,        # 本服务任务ID
+        "batch_id": task.batch_id,      # 客户返回的匹配批次号
+        "done": task.done,
+        "error": task.error,
+        "created_at": task.created_at,
+        "event_count": len(events),
+        "events": events,               # 完整对话（心跳已过滤）
+    }
+
+
 @app.post("/api/protocol/match")
 async def protocol_match(request: ProtocolMatchRequest):
-    """发起协议匹配并实时转发客户过程事件（单一接口，支持断线重连）
+    """协议匹配：发起新任务 / 重连当前任务（单接口，支持断线重连续传）
 
-    - 新 task_id：调用客户流式接口一次（地址默认 127.0.0.1:8100，
-      可由请求体 url 指定），事件实时透传；
-    - 已存在且执行中的 task_id：不再次调用客户接口，直接从上次读到的位置续传
-      （断线期间新产生的事件会补发），前端刷新/关窗后重新调用即可"接着看"；
-    - 已结束的 task_id：回放完整历史事件，方便查看结果。
+    - action=start：新建任务并调用客户流式接口一次（地址默认取
+      CUSTOMER_MATCH_URL，可由请求体 url 指定），事件实时透传；
+    - action=task ：重连当前（最近创建的）任务，不再调用客户接口——
+      · 任务执行中：从上次读到的位置续传，断线期间产生的事件补发；
+      · 任务已结束：回放完整历史事件，便于刷新后查看结果。
+
+    客户的匹配批次号由其 SSE 事件的 task_id 字段给出，收到后记录在任务上。
 
     匹配过程可能长达 20 分钟以上：读超时不设上限、心跳保活（详见
     protocol_match_client）；任务后台运行，与前端连接解耦。
     """
-    task_id = request.task_id or new_task_id()
-
-    task = protocol_task_registry.get(task_id)
-    if task is None:
-        payload = {"task_id": task_id}
-        payload.update(request.params or {})  # 客户端对象属性透传客户接口
-        task = protocol_task_registry.create(task_id, payload, url=request.url)
+    if request.action == ProtocolAction.TASK:
+        task = protocol_task_registry.latest()
+        if task is None:
+            logger.warning("[Protocol] action=task 但暂无可重连的任务")
+            return StreamingResponse(_no_task_stream(), media_type="text/event-stream",
+                                     headers=SSE_HEADERS)
+        mode = "finished" if task.done else "reconnect"
+        logger.info("[Protocol] action=task 重连任务 本服务task_id=%s 客户批次号=%s mode=%s 已读%d条",
+                    task.task_id, task.batch_id, mode, task.consumed)
+    else:
+        task = protocol_task_registry.create(dict(request.params or {}), url=request.url)
         task.worker = asyncio.create_task(run_worker(task))
         mode = "new"
-        logger.info("[Protocol] 新任务启动，调用客户接口 url=%s task_id=%s params=%s",
-                    request.url or "默认", task_id, payload)
-    elif task.done:
-        mode = "finished"
-        logger.info("[Protocol] 任务已结束，回放历史事件 task_id=%s err=%s",
-                    task_id, task.error)
-    else:
-        mode = "reconnect"
-        logger.info("[Protocol] 任务执行中，直接续传（不再调用8100）task_id=%s 已读%d条",
-                    task_id, task.consumed)
+        logger.info("[Protocol] action=start 新任务启动 本服务task_id=%s url=%s 透传参数=%s",
+                    task.task_id, request.url or "默认", task.payload)
 
     async def event_generator():
-        # 已结束的任务从 0 回放（方便刷新后查看完整结果）；执行中的从上次游标续传
+        # 已结束的任务从 0 回放（方便刷新后查看完整对话）；执行中的从上次游标续传
         start_pos = 0 if task.done else task.consumed
         count = 0
         # 先给前端一个连接元事件，方便页面区分 新建/重连/已结束
-        yield f"data: {json.dumps({'event': 'conn', 'task_id': task_id, 'mode': mode}, ensure_ascii=False)}\n\n"
+        yield _sse_data({"event": "conn", "task_id": task.task_id,
+                         "batch_id": task.batch_id, "mode": mode})
         try:
             async for item in task.events_from(start_pos):
                 if item is KEEPALIVE:
                     yield ": keepalive\n\n"
                 else:
-                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    yield _sse_data(item)
                     if item.get("event") == EVENT_DONE:
                         break
                 count += 1
         except asyncio.CancelledError:
-            logger.info("[Protocol] 客户端断开，任务后台继续运行 task_id=%s 本次已读%d条",
-                        task_id, count)
+            logger.info("[Protocol] 客户端断开，任务后台继续运行 本服务task_id=%s 本次已读%d条",
+                        task.task_id, count)
             raise
         finally:
             task.consumed = max(task.consumed, start_pos + count)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+async def _no_task_stream():
+    """无任务可重连时的兜底：吐一条 error 事件后结束"""
+    yield _sse_data({"event": "error", "content": "暂无可重连的任务，请先发起匹配（action=start）",
+                     "status": "error"})
+
+
+@app.get("/api/protocol/history")
+async def protocol_history(task_id: Optional[str] = None):
+    """查看历史任务对话（内存保留最近 5 个任务）
+
+    - 不传 task_id：按创建时间倒序返回全部留存任务及其完整事件对话；
+    - 传 task_id：只返回指定任务，key 可以是本服务 task_id 或客户匹配批次号。
+    """
+    if task_id:
+        task = protocol_task_registry.find(task_id)
+        tasks = [task] if task else []
+    else:
+        tasks = protocol_task_registry.history()
+    logger.info("[Protocol] 查询历史任务 key=%s 命中 %d 个", task_id, len(tasks))
+    return {"code": 200, "message": "success", "data": {"tasks": [_task_digest(t) for t in tasks]}}
 
 
 @app.post("/api/protocol/check-url")
